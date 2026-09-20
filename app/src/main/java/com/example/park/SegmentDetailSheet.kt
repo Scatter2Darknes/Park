@@ -91,7 +91,7 @@ fun SegmentDetailSheet(
                     fontWeight = FontWeight.SemiBold
                 )
             } else {
-                Text("No upcoming cleaning found in the next 60 days.")
+                Text("No upcoming cleaning found.")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
