@@ -17,6 +17,9 @@ data class ParkedState(
     val exactPinLng: Double? = null,
     val parkedAtMillis: Long,
     val nextSweepAtMillis: Long?,
+    // Outcome of the last scheduling attempt at park time: true if a reminder alarm was set (exact
+    // or the inexact fallback) or one fired immediately, false if nothing could be scheduled.
+    // Written by saveParkedState after scheduling; not read anywhere yet.
     val notificationScheduled: Boolean = false,
     val rppRegulationId: String? = null, // resolved once at parking time — see RppMatcher.findConfidentRppMatch
     // Delivery markers: each stores the DEADLINE (epoch ms) its tier's reminder was last actually
@@ -49,6 +52,9 @@ interface ParkedStateDao {
 
     @Query("SELECT * FROM parked_state")
     suspend fun getAll(): List<ParkedState>
+
+    @Query("UPDATE parked_state SET notificationScheduled = :scheduled WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun setNotificationScheduled(carId: Long, parkedAtMillis: Long, scheduled: Boolean)
 
     @Query("DELETE FROM parked_state WHERE carId = :carId")
     suspend fun clearForCar(carId: Long)

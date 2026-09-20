@@ -94,7 +94,7 @@ suspend fun saveParkedState(
             exactPinLng = exactPinLng,
             parkedAtMillis = parkedAtMillis,
             nextSweepAtMillis = nextMillis,
-            notificationScheduled = nextMillis != null,
+            notificationScheduled = false, // updated below once scheduling has actually run
             rppRegulationId = rppRegulation?.objectId
         )
     )
@@ -107,7 +107,7 @@ suspend fun saveParkedState(
     val reminderOffsetMillis = offsetMinutes * 60_000L
     val urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
 
-    if (nextMillis != null) {
+    val sweepHandled = if (nextMillis != null) {
         scheduleParkingReminders(
             context = context,
             carId = carId,
@@ -118,7 +118,7 @@ suspend fun saveParkedState(
             reminderOffsetMillis = reminderOffsetMillis,
             urgentOffsetMillis = urgentOffsetMillis
         )
-    }
+    } else false
 
     // Independent of the sweep reminder above — a block can be both swept AND RPP-zoned, or
     // only one, or neither. car is looked up fresh (not passed a default) since
@@ -131,7 +131,7 @@ suspend fun saveParkedState(
         "saveParkedState: RPP deadline = " + (rppDeadline?.moveByDateTime?.toString()
             ?: if (rppRegulation == null) "n/a (no match)" else "n/a (car holds a permit for this zone, or its DAYS didn't parse)")
     )
-    if (rppDeadline != null) {
+    val rppHandled = if (rppDeadline != null) {
         scheduleRppReminders(
             context = context,
             carId = carId,
@@ -144,7 +144,13 @@ suspend fun saveParkedState(
         )
     } else {
         cancelRppReminder(context, carId) // no RPP match here, car holds a permit, or re-parking away from a previous RPP spot
+        false
     }
+
+    // Records what actually happened (an alarm was set — exact or the inexact fallback — or a
+    // reminder fired right away), not merely that a deadline existed. Guarded by parkedAtMillis
+    // like the delivery markers, so it can't land on a newer row from a racing re-park.
+    db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, sweepHandled || rppHandled)
 
     enqueueWidgetRefresh(context)
 }

@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -84,13 +83,30 @@ fun snoozeReminder(
     kind: ReminderKind
 ) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
-    val exactAlarmsAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
     val trigger = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
     val pendingIntent = buildPendingIntent(context, carId, carName, corridor, nextSweepAtMillis, kind)
+    setAlarm(alarmManager, canScheduleExactAlarmsCompat(context), trigger, pendingIntent, "$kind snooze")
+}
+
+/**
+ * Sets one alarm: exact when the app may, otherwise the inexact [AlarmManager.setAndAllowWhileIdle]
+ * fallback — so a user who hasn't granted "Alarms & reminders" still gets their reminder, just
+ * possibly a few minutes late (Android batches inexact alarms and may defer them further in Doze),
+ * instead of silently getting nothing. Both variants use the same [pendingIntent], so a later
+ * exact set (after the permission is granted) simply replaces the inexact one.
+ */
+private fun setAlarm(
+    alarmManager: AlarmManager,
+    exactAlarmsAllowed: Boolean,
+    triggerAtMillis: Long,
+    pendingIntent: PendingIntent,
+    label: String
+) {
     if (exactAlarmsAllowed) {
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
     } else {
-        android.util.Log.w("Park", "Exact alarm permission not granted — snooze not scheduled")
+        android.util.Log.w("Park", "Exact alarm permission not granted — $label scheduled as an inexact fallback (may be late)")
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
     }
 }
 
@@ -143,6 +159,10 @@ suspend fun recordReminderDelivery(
  * left alone instead of re-posting it, and any alarm still pending in the slot (e.g. a snooze)
  * is deliberately not cancelled. A FUTURE trigger is still scheduled either way: it means the
  * offset was changed to something later than the reminder that already fired.
+ *
+ * @return whether this tier is taken care of: an alarm was set (exact or the inexact fallback),
+ *   the reminder fired right now, or it had already been delivered. False when nothing was set
+ *   and nothing fired (the deadline already passed, or the notification couldn't be posted).
  */
 private suspend fun scheduleOrFireImmediately(
     context: Context,
@@ -157,25 +177,27 @@ private suspend fun scheduleOrFireImmediately(
     exactAlarmsAllowed: Boolean,
     alreadyDeliveredForDeadline: Boolean,
     alarmManager: AlarmManager
-) {
+): Boolean {
     val trigger = nextSweepAtMillis - offsetMillis
-    when {
+    return when {
         // Sweeping itself has already fully passed — nothing left to usefully alert about.
-        nextSweepAtMillis <= now -> cancelAlarm(context, carId, kind)
+        nextSweepAtMillis <= now -> {
+            cancelAlarm(context, carId, kind)
+            false
+        }
 
         trigger > now -> {
-            if (exactAlarmsAllowed) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP, trigger,
-                    buildPendingIntent(context, carId, carName, corridor, nextSweepAtMillis, kind, parkedAtMillis)
-                )
-            } else {
-                android.util.Log.w("Park", "Exact alarm permission not granted — $kind reminder not scheduled")
-            }
+            setAlarm(
+                alarmManager, exactAlarmsAllowed, trigger,
+                buildPendingIntent(context, carId, carName, corridor, nextSweepAtMillis, kind, parkedAtMillis),
+                "$kind reminder"
+            )
+            true
         }
 
         alreadyDeliveredForDeadline -> {
             android.util.Log.d("Park", "$kind reminder for car $carId already delivered for deadline $nextSweepAtMillis — not re-posting")
+            true
         }
 
         else -> {
@@ -199,6 +221,7 @@ private suspend fun scheduleOrFireImmediately(
             // Only recorded if it was actually posted (POST_NOTIFICATIONS granted) — otherwise
             // the user was never told, and a later re-arm should get to try again.
             if (posted) recordReminderDelivery(context, carId, parkedAtMillis, kind, nextSweepAtMillis)
+            posted
         }
     }
 }
@@ -229,10 +252,10 @@ private suspend fun scheduleTiers(
     normalDeliveredForMillis: Long?,
     urgentDeliveredForMillis: Long?,
     clearStaleNotifications: Boolean
-) {
+): Boolean {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val now = System.currentTimeMillis()
-    val exactAlarmsAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+    val exactAlarmsAllowed = canScheduleExactAlarmsCompat(context)
     val normalDelivered = normalDeliveredForMillis == deadlineMillis
     val urgentDelivered = urgentDeliveredForMillis == deadlineMillis
 
@@ -244,19 +267,21 @@ private suspend fun scheduleTiers(
         }
     }
 
-    scheduleOrFireImmediately(
+    val normalHandled = scheduleOrFireImmediately(
         context, carId, carName, label, deadlineMillis, parkedAtMillis, reminderOffsetMillis,
         normalKind, now, exactAlarmsAllowed, normalDelivered, alarmManager
     )
 
-    if (urgentOffsetMillis != null) {
+    val urgentHandled = if (urgentOffsetMillis != null) {
         scheduleOrFireImmediately(
             context, carId, carName, label, deadlineMillis, parkedAtMillis, urgentOffsetMillis,
             urgentKind, now, exactAlarmsAllowed, urgentDelivered, alarmManager
         )
     } else {
         cancelAlarm(context, carId, urgentKind) // urgent tier disabled in Settings
+        false
     }
+    return normalHandled || urgentHandled
 }
 
 /**
@@ -267,6 +292,9 @@ private suspend fun scheduleTiers(
  * Already-shown notifications from a previous parked state are cleared first so a stale
  * "move your car" doesn't linger after re-parking or re-scheduling. Pass the parked row's
  * delivery markers when rescheduling an existing row; leave them null for a brand-new one.
+ *
+ * @return whether at least one tier is taken care of (an alarm set, exact or inexact fallback, or a
+ *   reminder fired now) — what ParkedState.notificationScheduled records.
  */
 suspend fun scheduleParkingReminders(
     context: Context,
