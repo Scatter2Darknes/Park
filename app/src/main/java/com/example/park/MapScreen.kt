@@ -90,19 +90,6 @@ private const val BEARING_TRUST_SPEED_MPS = 1.0f
 // user-facing) into the degree-based bounding box loadAndDrawSegments actually uses.
 private const val METERS_PER_DEGREE = 111_320.0
 
-// If GPS fixes stop arriving for longer than this while driving, assume a tunnel (or similar
-// signal-blocking environment) rather than routine GPS noise. Was 8s, which turned out to be
-// way too tight in practice: continuous fixes come from LocationManager.GPS_PROVIDER alone
-// (no network/fused blending), and raw satellite GPS routinely has multi-second gaps in a
-// dense city — tall buildings, freeway underpasses, hills — that aren't remotely a tunnel.
-// Real-world driving on the S25 confirmed this: repeated false triggers caused a visible
-// full-screen "flicker" as the map's tile source and floating-icon tint flipped dark and
-// back, sometimes several times a minute. Raised to 20s, trading slower detection of a
-// genuine tunnel for many fewer false positives from ordinary urban GPS jitter — SF doesn't
-// have many long highway tunnels, so a few extra seconds before flipping dark isn't a big
-// loss, but repeated false flickers during normal surface-street driving was a real problem.
-private const val TUNNEL_GAP_THRESHOLD_MS = 20000L
-
 // How often onRawLocation is allowed to actually trigger a segment reload while driving —
 // a throttle, not a debounce: fixes arrive roughly every DRIVING_MIN_TIME_MS (1s), so a
 // debounce (wait for fixes to STOP) would never fire during continuous motion at all. 2.5s
@@ -281,6 +268,13 @@ fun MapScreen(
     // regardless of what the resolved auto-mode would otherwise pick, since a suspected
     // tunnel means "it's dark right now" independent of the clock or system theme.
     var lastFixTimestamp by remember { mutableStateOf(System.currentTimeMillis()) }
+    // Speed of that last fix (null if it had none), and when the map last recovered from a
+    // suspected tunnel — the two extra inputs to shouldSuspectTunnel (see TunnelDetection.kt),
+    // which is what stops a car idling at a red light from being mistaken for a tunnel.
+    var lastFixSpeedMps by remember { mutableStateOf<Float?>(null) }
+    var lastRegainAtMs by remember { mutableStateOf<Long?>(null) }
+    // The "Auto-dim map in tunnels" setting; loaded with the other map settings below.
+    var tunnelAutoDimEnabled by remember { mutableStateOf(SettingsDefaults.TUNNEL_AUTO_DIM_ENABLED) }
     // Tracks the last time onRawLocation actually triggered a segment reload, so that path
     // can be throttled (fire on a fixed cadence) rather than debounced (wait for fixes to
     // stop arriving) — see the onRawLocation hook below for why debounce was wrong here.
@@ -300,6 +294,7 @@ fun MapScreen(
         lastRefreshMillis = SettingsRepository(context).lastRefreshMillis.first()
         showImminentCountdown = SettingsRepository(context).showImminentCountdown.first()
         showRppZoneLabels = SettingsRepository(context).showRppZoneLabels.first()
+        tunnelAutoDimEnabled = SettingsRepository(context).tunnelAutoDimEnabled.first()
         parkingConfirmationStyle = SettingsRepository(context).parkingConfirmationStyle.first()
         // The map (below) isn't created until this flips true. Without this gate, the
         // AndroidView factory — which runs synchronously on first composition, before this
@@ -373,10 +368,40 @@ fun MapScreen(
         if (!drivingModeActive) {
             suspectedTunnel = false
         } else {
+            // lastFixTimestamp is only ever updated by driving mode's own fix callback, so
+            // without this it still holds whatever it was at the last drive (or at composition)
+            // and the very first check below could see a huge stale "gap" the moment driving
+            // mode turns on. Start the clock fresh, with no known speed (=> no dimming until a
+            // real moving fix arrives).
+            lastFixTimestamp = System.currentTimeMillis()
+            lastFixSpeedMps = null
+            var lastLoggedSuppressedFix = -1L
             while (true) {
                 delay(2000L)
-                if (System.currentTimeMillis() - lastFixTimestamp > TUNNEL_GAP_THRESHOLD_MS) {
+                val now = System.currentTimeMillis()
+                // Config is rebuilt each pass so the Settings toggle loaded a moment after this
+                // effect starts is picked up.
+                val config = TunnelConfig(enabled = tunnelAutoDimEnabled)
+                val suspect = shouldSuspectTunnel(now, lastFixTimestamp, lastFixSpeedMps, lastRegainAtMs, config)
+                val gapMs = now - lastFixTimestamp
+                if (suspect) {
+                    if (!suspectedTunnel) {
+                        android.util.Log.d(
+                            "Tunnel",
+                            "SUSPECTED: gap=${gapMs}ms lastSpeed=${lastFixSpeedMps}m/s " +
+                                    "sinceRegain=${lastRegainAtMs?.let { now - it }}ms -> dimming"
+                        )
+                    }
                     suspectedTunnel = true
+                } else if (tunnelAutoDimEnabled && gapMs > config.gapThresholdMs && lastLoggedSuppressedFix != lastFixTimestamp) {
+                    // A silent-GPS gap that did NOT dim, logged once per gap so a wrongly
+                    // missed (or wrongly suppressed) tunnel can be diagnosed from Logcat too.
+                    lastLoggedSuppressedFix = lastFixTimestamp
+                    android.util.Log.d(
+                        "Tunnel",
+                        "gap=${gapMs}ms lastSpeed=${lastFixSpeedMps}m/s sinceRegain=${lastRegainAtMs?.let { now - it }}ms -> NOT dimming " +
+                                "(speed gate or regain cooldown)"
+                    )
                 }
             }
         }
@@ -562,7 +587,14 @@ fun MapScreen(
                 SingleSourceLocationProvider.DRIVING_MIN_DISTANCE_M
             )
             locationProviderRef?.onRawLocation = { location ->
-                lastFixTimestamp = System.currentTimeMillis()
+                val fixAtMs = System.currentTimeMillis()
+                if (suspectedTunnel) {
+                    // Start the post-regain cooldown (see shouldSuspectTunnel).
+                    lastRegainAtMs = fixAtMs
+                    android.util.Log.d("Tunnel", "REGAINED after a ${fixAtMs - lastFixTimestamp}ms gap")
+                }
+                lastFixTimestamp = fixAtMs
+                lastFixSpeedMps = if (location.hasSpeed()) location.speed else null
                 suspectedTunnel = false
 
                 if (location.hasSpeed() && location.speed > BEARING_TRUST_SPEED_MPS && location.hasBearing()) {

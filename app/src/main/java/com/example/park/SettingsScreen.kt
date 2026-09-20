@@ -91,6 +91,7 @@ fun SettingsScreen(
     var bluetoothAutoUnparkOnReconnect by remember { mutableStateOf(SettingsDefaults.BLUETOOTH_AUTO_UNPARK_ON_RECONNECT) }
     var autoStopDrivingModeOnDisconnect by remember { mutableStateOf(SettingsDefaults.AUTO_STOP_DRIVING_MODE_ON_DISCONNECT) }
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
+    var tunnelAutoDimEnabled by remember { mutableStateOf(SettingsDefaults.TUNNEL_AUTO_DIM_ENABLED) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
     var tileCacheMaxMb by remember { mutableStateOf(SettingsDefaults.TILE_CACHE_MAX_MB) }
     var confirmingClearCache by remember { mutableStateOf(false) }
@@ -143,6 +144,7 @@ fun SettingsScreen(
         bluetoothAutoUnparkOnReconnect = settings.bluetoothAutoUnparkOnReconnect.first()
         autoStopDrivingModeOnDisconnect = settings.autoStopDrivingModeOnDisconnect.first()
         showImminentCountdown = settings.showImminentCountdown.first()
+        tunnelAutoDimEnabled = settings.tunnelAutoDimEnabled.first()
         showRppZoneLabels = settings.showRppZoneLabels.first()
         tileCacheMaxMb = settings.tileCacheMaxMb.first()
         cacheSizeBytes = tileCacheSizeBytes()
@@ -700,6 +702,29 @@ fun SettingsScreen(
                 onCheckedChange = { checked ->
                     showImminentCountdown = checked
                     scope.launch { settings.setShowImminentCountdown(checked) }
+                }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Auto-dim map in tunnels", style = MaterialTheme.typography.labelMedium)
+                DescriptionToggle(
+                    "While Driving Mode is on, dims the map when GPS goes silent for about 20 " +
+                            "seconds while you were moving (like a tunnel), and brightens it again " +
+                            "when the signal returns. Sitting still at a red light never counts. " +
+                            "Turn this off if the map dims when it shouldn't."
+                )
+            }
+            Switch(
+                checked = tunnelAutoDimEnabled,
+                onCheckedChange = { checked ->
+                    tunnelAutoDimEnabled = checked
+                    scope.launch { settings.setTunnelAutoDimEnabled(checked) }
                 }
             )
         }

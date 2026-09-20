@@ -41,6 +41,7 @@ object SettingsKeys {
     val BLUETOOTH_AUTO_UNPARK_ON_RECONNECT = booleanPreferencesKey("bluetooth_auto_unpark_on_reconnect")
     val AUTO_STOP_DRIVING_MODE_ON_DISCONNECT = booleanPreferencesKey("auto_stop_driving_mode_on_disconnect")
     val SHOW_IMMINENT_COUNTDOWN = booleanPreferencesKey("show_imminent_countdown")
+    val TUNNEL_AUTO_DIM_ENABLED = booleanPreferencesKey("tunnel_auto_dim_enabled")
     val SHOW_RPP_ZONE_LABELS = booleanPreferencesKey("show_rpp_zone_labels")
     val TILE_CACHE_MAX_MB = intPreferencesKey("tile_cache_max_mb")
     // "DRIVING:<carId>:<epochMillis>" or "PARKED:<carId>:<epochMillis>" — a short-lived record
@@ -94,6 +95,7 @@ object SettingsDefaults {
     // forgetting to tap "Stop" is the more likely failure mode than wanting it to stay on.
     const val AUTO_STOP_DRIVING_MODE_ON_DISCONNECT = true
     const val SHOW_IMMINENT_COUNTDOWN = true
+    const val TUNNEL_AUTO_DIM_ENABLED = true
     // Defaults on, unlike SHOW_IMMINENT_COUNTDOWN above — an RPP zone label only ever appears
     // at all while that block's restriction is actively in effect (see activeRppWindowEndMillis),
     // so it's inherently rarer and more directly actionable than the countdown labels, which
@@ -406,6 +408,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setShowImminentCountdown(value: Boolean) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.SHOW_IMMINENT_COUNTDOWN] = value }
+    }
+
+    val tunnelAutoDimEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.TUNNEL_AUTO_DIM_ENABLED] ?: SettingsDefaults.TUNNEL_AUTO_DIM_ENABLED
+    }
+
+    suspend fun setTunnelAutoDimEnabled(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.TUNNEL_AUTO_DIM_ENABLED] = value }
     }
 
     val showRppZoneLabels: Flow<Boolean> = context.dataStore.data.map { prefs ->

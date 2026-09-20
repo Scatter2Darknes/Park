@@ -452,7 +452,11 @@ class SingleSourceLocationProvider(
         const val IDLE_MIN_TIME_MS = 5000L
         const val IDLE_MIN_DISTANCE_M = 10f
         const val DRIVING_MIN_TIME_MS = 1000L
-        const val DRIVING_MIN_DISTANCE_M = 2f
+        // 0, not a distance filter: with a 2 m filter Android stops calling back while the car is
+        // stationary even though GPS is healthy, so a long red light looked like lost signal (a
+        // tunnel). The 1 s time interval still bounds the rate; jitter while stopped is already
+        // handled by holding the last good heading below BEARING_TRUST_SPEED_MPS.
+        const val DRIVING_MIN_DISTANCE_M = 0f
     }
 }
 
