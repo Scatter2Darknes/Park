@@ -72,6 +72,9 @@ dependencies {
     // you fold it into the catalog.
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     testImplementation(libs.junit)
+    // Android's own org.json classes are stubs that throw on the JVM, so unit tests of code that
+    // parses JSON (RppDataApiTest) need the real library. Test-only; the app uses the platform's.
+    testImplementation("org.json:json:20260814")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

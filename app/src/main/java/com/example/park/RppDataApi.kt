@@ -28,6 +28,10 @@ suspend fun fetchRppPage(limit: Int, offset: Int): String = withContext(Dispatch
             "&returnGeometry=true" +
             "&resultOffset=$offset" +
             "&resultRecordCount=$limit" +
+            // The layer's native spatial reference is already WGS84 (wkid 4326, checked against the
+            // layer's own metadata), but the parser reads geometry as [lng, lat] degrees, so ask for it
+            // explicitly rather than depend on that never changing.
+            "&outSR=4326" +
             "&f=json"
     val url = URL("$RPP_FEATURE_SERVICE_URL?$query")
     val connection = url.openConnection() as HttpURLConnection
@@ -84,6 +88,22 @@ suspend fun fetchAllRppRegulations(onPage: suspend (List<RppZoneRegulation>) -> 
 }
 
 /**
+ * A string attribute, or null when it's absent, a JSON null, blank, or the literal text "null".
+ *
+ * Android's org.json `optString` turns a JSON null into the four-letter STRING "null" rather than
+ * an empty string, which would slip through a plain isNotEmpty() check and become a bogus zone
+ * (a "NULL" entry in the permit picker). `isNull` is true for both a missing key and a JSON null.
+ * The feed also uses a single space " " for "no value" in these fields (its own WHERE clause
+ * filters on it), which `trim()` turns into blank. The text check is a belt-and-braces guard in case
+ * a null ever arrives already stringified.
+ */
+internal fun JSONObject.optCleanString(key: String): String? {
+    if (isNull(key)) return null
+    val value = optString(key).trim()
+    return value.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+}
+
+/**
  * Parses an ArcGIS FeatureServer query response (attributes + geometry.paths — this exact
  * shape was confirmed against RPP_FEATURE_SERVICE_URL directly, not assumed from generic
  * ArcGIS docs). A feature's geometry can have multiple "paths" (disconnected line parts); every
@@ -99,7 +119,7 @@ fun parseRppRegulations(json: String): List<RppZoneRegulation> {
         val attrs = feature.optJSONObject("attributes") ?: continue
 
         val zoneLetters = listOf("RPPAREA1", "RPPAREA2", "RPPAREA3")
-            .mapNotNull { key -> attrs.optString(key).trim().takeIf { it.isNotEmpty() } }
+            .mapNotNull { key -> attrs.optCleanString(key) }
             .distinct()
             .joinToString(",")
         if (zoneLetters.isEmpty()) continue // defensive — the WHERE clause should already exclude these
@@ -119,7 +139,7 @@ fun parseRppRegulations(json: String): List<RppZoneRegulation> {
             RppZoneRegulation(
                 objectId = attrs.optInt("OBJECTID").toString(),
                 zoneLetters = zoneLetters,
-                days = attrs.optString("DAYS"),
+                days = attrs.optCleanString("DAYS") ?: "",
                 hrsBegin = attrs.optInt("HRS_BEGIN"),
                 hrsEnd = attrs.optInt("HRS_END"),
                 hrLimit = attrs.optDouble("HRLIMIT", 0.0).toFloat(),

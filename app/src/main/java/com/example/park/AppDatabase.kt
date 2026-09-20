@@ -132,7 +132,7 @@ suspend fun saveParkedState(
     android.util.Log.d(
         "RppSync",
         "saveParkedState: RPP deadline = " + (rppDeadline?.moveByDateTime?.toString()
-            ?: if (rppRegulation == null) "n/a (no match)" else "n/a (car holds a permit for this zone, or its DAYS didn't parse)")
+            ?: if (rppRegulation == null) "n/a (no match)" else "n/a (car holds a permit for this zone, its DAYS didn't parse, hrLimit=${rppRegulation.hrLimit} leaves no usable limit, or no violation is possible in its window)")
     )
     val rppHandled = if (rppDeadline != null) {
         scheduleRppReminders(

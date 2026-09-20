@@ -68,6 +68,14 @@ object SfHolidayCalendar {
         putNextYearsNewYearsIfSpillsBack(year)
     }
 
+    /**
+     * True if the city doesn't enforce time-limited residential permit parking on [date]. SFMTA lists
+     * time-limited RPP among the programs not enforced on its holiday-calendar dates, so this uses the
+     * FULL list (the same one weekday-daytime street sweeping observes), including a New Year's Day
+     * observed back in December. Independent of any sweeping segment's own route type.
+     */
+    fun isRppSuspended(date: LocalDate): Boolean = date in fullSuspensionHolidays(date.year)
+
     /** True if [date] is a holiday [segment]'s route observes a suspension on. */
     fun isSuspended(date: LocalDate, segment: StreetSegment): Boolean = holidayName(date, segment) != null
 

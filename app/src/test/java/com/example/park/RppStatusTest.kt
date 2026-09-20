@@ -122,13 +122,101 @@ class RppStatusTest {
     }
 
     @Test
-    fun nextRppDeadline_moveByCappedAtWindowEnd_whenLimitWouldExceedIt() {
+    fun nextRppDeadline_limitRunsPastWindowEnd_meansNoViolationToday_andRollsToNextMorning() {
+        // Previously this clamped to 6pm ("limit is up" at the moment enforcement ends, with nothing
+        // scheduled for the next day). Now: at 5pm a 4h limit lands at 9pm, after the 6pm close, so
+        // there's no violation today and the next one is tomorrow's window-open + 4h.
         val regulation = dummyRegulation(hrsBegin = 800, hrsEnd = 1800, hrLimit = 4.0f)
         val car = dummyCar()
-        val parkedSince = LocalDateTime.of(2026, 9, 14, 17, 0) // parked at 5pm, 4hr limit would land at 9pm
+        val parkedSince = LocalDateTime.of(2026, 9, 14, 17, 0) // Monday 5pm
         val now = LocalDateTime.of(2026, 9, 14, 17, 30)
         val warning = nextRppDeadline(regulation, car, parkedSince, now)
-        assertEquals(LocalDateTime.of(2026, 9, 14, 18, 0), warning?.moveByDateTime) // capped at 6pm window end
+        assertEquals(LocalDateTime.of(2026, 9, 15, 12, 0), warning?.moveByDateTime) // Tuesday 8am + 4h
+    }
+
+    @Test
+    fun nextRppDeadline_559pmAnd601pm_bothGiveTomorrowMorning() {
+        val regulation = dummyRegulation(hrsBegin = 800, hrsEnd = 1800, hrLimit = 2.0f)
+        val car = dummyCar()
+        val tomorrow10am = LocalDateTime.of(2026, 9, 15, 10, 0)
+        val at559 = LocalDateTime.of(2026, 9, 14, 17, 59)
+        val at601 = LocalDateTime.of(2026, 9, 14, 18, 1)
+        assertEquals(tomorrow10am, nextRppDeadline(regulation, car, at559, at559)?.moveByDateTime)
+        assertEquals(tomorrow10am, nextRppDeadline(regulation, car, at601, at601)?.moveByDateTime)
+    }
+
+    @Test
+    fun nextRppDeadline_fridayEvening_rollsToMonday() {
+        val regulation = dummyRegulation(days = "M-F", hrsBegin = 800, hrsEnd = 1800, hrLimit = 2.0f)
+        val car = dummyCar()
+        val friday559 = LocalDateTime.of(2026, 9, 18, 17, 59)
+        assertEquals(LocalDateTime.of(2026, 9, 21, 10, 0), nextRppDeadline(regulation, car, friday559, friday559)?.moveByDateTime)
+    }
+
+    @Test
+    fun nextRppDeadline_justBeforeClose_stillGivesATodayDeadline_whenTheLimitFits() {
+        // 1h limit, parked 4:30pm: 5:30pm is inside the window, so it IS a violation today.
+        val regulation = dummyRegulation(hrsBegin = 800, hrsEnd = 1800, hrLimit = 1.0f)
+        val parked = LocalDateTime.of(2026, 9, 14, 16, 30)
+        assertEquals(LocalDateTime.of(2026, 9, 14, 17, 30), nextRppDeadline(regulation, dummyCar(), parked, parked)?.moveByDateTime)
+    }
+
+    @Test
+    fun nextRppDeadline_limitAsLongAsTheWholeWindow_neverProducesADeadline() {
+        // The live feed has 72-hour rows; a limit that can't be exceeded within a window never applies.
+        val regulation = dummyRegulation(hrsBegin = 800, hrsEnd = 1800, hrLimit = 72f)
+        val now = LocalDateTime.of(2026, 9, 14, 9, 0)
+        assertNull(nextRppDeadline(regulation, dummyCar(), now, now))
+    }
+
+    @Test
+    fun nextRppDeadline_zeroOrNegativeLimit_returnsNull() {
+        val now = LocalDateTime.of(2026, 9, 14, 9, 0)
+        assertNull(nextRppDeadline(dummyRegulation(hrLimit = 0f), dummyCar(), now, now))
+        assertNull(nextRppDeadline(dummyRegulation(hrLimit = -1f), dummyCar(), now, now))
+    }
+
+    @Test
+    fun nextRppDeadline_skipsHolidays() {
+        val regulation = dummyRegulation(days = "M-F", hrsBegin = 800, hrsEnd = 1800, hrLimit = 2.0f)
+        val car = dummyCar()
+
+        // Thanksgiving 2026 (Thu Nov 26) and the day after (Fri Nov 27) are suspended: from Wednesday
+        // evening the next enforced day is Monday Nov 30.
+        val wedEvening = LocalDateTime.of(2026, 11, 25, 19, 0)
+        assertEquals(LocalDateTime.of(2026, 11, 30, 10, 0), nextRppDeadline(regulation, car, wedEvening, wedEvening)?.moveByDateTime)
+
+        // Christmas 2026 is a Friday: from Thursday evening the next enforced day is Monday Dec 28.
+        val thuEvening = LocalDateTime.of(2026, 12, 24, 19, 0)
+        assertEquals(LocalDateTime.of(2026, 12, 28, 10, 0), nextRppDeadline(regulation, car, thuEvening, thuEvening)?.moveByDateTime)
+
+        // Jan 1, 2028 is a Saturday, so New Year's Day is observed Friday Dec 31, 2027 (a date in the
+        // PREVIOUS year's calendar): from Thursday evening the next enforced day is Monday Jan 3.
+        val dec30 = LocalDateTime.of(2027, 12, 30, 19, 0)
+        assertEquals(LocalDateTime.of(2028, 1, 3, 10, 0), nextRppDeadline(regulation, car, dec30, dec30)?.moveByDateTime)
+    }
+
+    @Test
+    fun nextRppDeadline_parkedOnAHolidayMorning_startsFromTheNextEnforcedDay() {
+        // Labor Day 2026 is Monday Sep 7: parking at 10am that day starts no clock.
+        val regulation = dummyRegulation(days = "M-F", hrsBegin = 800, hrsEnd = 1800, hrLimit = 2.0f)
+        val labor = LocalDateTime.of(2026, 9, 7, 10, 0)
+        assertEquals(LocalDateTime.of(2026, 9, 8, 10, 0), nextRppDeadline(regulation, dummyCar(), labor, labor)?.moveByDateTime)
+    }
+
+    @Test
+    fun isRppSuspended_usesTheFullHolidayList() {
+        assertTrue(SfHolidayCalendar.isRppSuspended(LocalDate.of(2026, 9, 7)))    // Labor Day
+        assertTrue(SfHolidayCalendar.isRppSuspended(LocalDate.of(2026, 11, 27)))  // day after Thanksgiving
+        assertTrue(SfHolidayCalendar.isRppSuspended(LocalDate.of(2027, 12, 31)))  // New Year's 2028, observed
+        assertTrue(!SfHolidayCalendar.isRppSuspended(LocalDate.of(2026, 9, 8)))   // an ordinary Tuesday
+    }
+
+    @Test
+    fun activeRppWindowEndMillis_isNullOnAHoliday_evenInsideTheWindow() {
+        val regulation = dummyRegulation(days = "M-F", hrsBegin = 800, hrsEnd = 1800)
+        assertNull(activeRppWindowEndMillis(regulation, LocalDateTime.of(2026, 9, 7, 10, 0))) // Labor Day
+        assertEquals(8 * 60 * 60 * 1000L, activeRppWindowEndMillis(regulation, LocalDateTime.of(2026, 9, 8, 10, 0))) // next day: active
     }
 
     @Test

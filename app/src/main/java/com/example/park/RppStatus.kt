@@ -64,6 +64,7 @@ fun militaryHourToLocalTime(military: Int): LocalTime {
  */
 fun activeRppWindowEndMillis(regulation: RppZoneRegulation, now: LocalDateTime): Long? {
     if (now.dayOfWeek !in parseDaysRange(regulation.days)) return null
+    if (SfHolidayCalendar.isRppSuspended(now.toLocalDate())) return null // not enforced today, so no zone label either
     val windowStart = militaryHourToLocalTime(regulation.hrsBegin)
     val windowEnd = militaryHourToLocalTime(regulation.hrsEnd)
     val nowTime = now.toLocalTime()
@@ -96,6 +97,17 @@ data class RppWarning(
  * which this feed has no data on either way. Matching the sweep reminder's own scope, this also
  * doesn't chain forward past the first found deadline — if the car is still parked there
  * without moving well past it, nothing here re-schedules a second, later one automatically.
+ *
+ * A day only produces a deadline if the limit can actually be exceeded inside that day's window:
+ * when clock start + limit lands at or after the window's end there's no violation that day, so the
+ * search moves on to the next enforced day (whose clock starts at the window's opening). This is
+ * what stops "parked at 5:59pm, window closes at 6pm" from returning a 6pm deadline with a wrong
+ * "limit is up" message and nothing scheduled for the next morning. It also means a limit at least
+ * as long as the whole window (the feed has 72-hour rows) never yields a deadline at all.
+ *
+ * Also null for a limit of zero or less: the feed has ~850 rows with 0 or no HRLIMIT, and "0 hours"
+ * can't be turned into a meaningful move-by time. Days the city doesn't enforce time-limited RPP
+ * ([SfHolidayCalendar.isRppSuspended]) are skipped like any other non-enforced day.
  */
 fun nextRppDeadline(
     regulation: RppZoneRegulation,
@@ -108,6 +120,7 @@ fun nextRppDeadline(
     if (zoneLetters.isEmpty()) return null
     if (car.permitZoneLetterSet().any { it in zoneLetters }) return null
 
+    if (regulation.hrLimit <= 0f) return null
     val activeDays = parseDaysRange(regulation.days)
     if (activeDays.isEmpty()) return null
 
@@ -116,7 +129,7 @@ fun nextRppDeadline(
 
     var candidateDate = from.toLocalDate()
     repeat(maxDaysToSearch) {
-        if (candidateDate.dayOfWeek in activeDays) {
+        if (candidateDate.dayOfWeek in activeDays && !SfHolidayCalendar.isRppSuspended(candidateDate)) {
             val isToday = candidateDate == from.toLocalDate()
             val windowEndThisDay = candidateDate.atTime(windowEnd)
             // If today's window has already fully closed by `from`, there's nothing left to
@@ -125,11 +138,15 @@ fun nextRppDeadline(
                 val windowStartThisDay = candidateDate.atTime(windowStart)
                 val clockStart = if (isToday && parkedSince.isAfter(windowStartThisDay)) parkedSince else windowStartThisDay
                 val moveBy = clockStart.plusMinutes((regulation.hrLimit * 60).toLong())
-                return RppWarning(
-                    zoneLetters = zoneLetters,
-                    hrLimitHours = regulation.hrLimit,
-                    moveByDateTime = if (moveBy.isBefore(windowEndThisDay)) moveBy else windowEndThisDay
-                )
+                // Only a deadline strictly inside the window is a violation. At or after the
+                // window's end the limit can't be exceeded today, so fall through to the next day.
+                if (moveBy.isBefore(windowEndThisDay)) {
+                    return RppWarning(
+                        zoneLetters = zoneLetters,
+                        hrLimitHours = regulation.hrLimit,
+                        moveByDateTime = moveBy
+                    )
+                }
             }
         }
         candidateDate = candidateDate.plusDays(1)
