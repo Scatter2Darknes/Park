@@ -1,0 +1,181 @@
+package com.example.park
+
+import android.content.Context
+import kotlinx.coroutines.flow.first
+import org.json.JSONArray
+import org.json.JSONObject
+
+private const val BACKUP_VERSION = 1
+
+private fun JSONObject.putNullable(key: String, value: String?) {
+    put(key, value ?: JSONObject.NULL)
+}
+
+private fun JSONObject.optStringOrNull(key: String): String? =
+    if (has(key) && !isNull(key)) getString(key) else null
+
+/**
+ * Serializes everything worth backing up: car profiles, saved locations, schedule
+ * overrides, and settings. Deliberately excludes street_segment (re-fetchable cached DataSF
+ * data) and parked_state (ephemeral — restoring "where you were parked" on a different
+ * device/after a factory reset isn't meaningful).
+ */
+suspend fun exportBackupJson(context: Context): String {
+    val db = AppDatabase.getInstance(context)
+    val settings = SettingsRepository(context)
+
+    val carsJson = JSONArray()
+    db.carDao().getAll().forEach { car ->
+        carsJson.put(JSONObject().apply {
+            put("name", car.name)
+            put("isDefault", car.isDefault)
+            putNullable("bluetoothDeviceAddress", car.bluetoothDeviceAddress)
+            putNullable("colorHex", car.colorHex)
+            putNullable("iconEmoji", car.iconEmoji)
+        })
+    }
+
+    val locationsJson = JSONArray()
+    db.savedLocationDao().getAll().forEach { loc ->
+        locationsJson.put(JSONObject().apply {
+            put("name", loc.name)
+            put("lat", loc.lat)
+            put("lng", loc.lng)
+        })
+    }
+
+    val overridesJson = JSONArray()
+    db.scheduleOverrideDao().getAll().forEach { o ->
+        overridesJson.put(JSONObject().apply {
+            put("blockSweepId", o.blockSweepId)
+            put("fullName", o.fullName)
+            put("week1", o.week1); put("week2", o.week2); put("week3", o.week3)
+            put("week4", o.week4); put("week5", o.week5)
+            put("fromHour", o.fromHour); put("toHour", o.toHour)
+            putNullable("notes", o.notes)
+        })
+    }
+
+    val settingsJson = JSONObject().apply {
+        put("alwaysAskCar", settings.alwaysAskCar.first())
+        put("notificationOffsetMinutes", settings.notificationOffsetMinutes.first())
+        put("urgentReminderEnabled", settings.urgentReminderEnabled.first())
+        put("urgentOffsetMinutes", settings.urgentOffsetMinutes.first())
+        put("soonThresholdDays", settings.soonThresholdDays.first())
+        put("imminentThresholdDays", settings.imminentThresholdDays.first())
+        put("refreshIntervalHours", settings.refreshIntervalHours.first())
+        put("drivingModeZoom", settings.drivingModeZoom.first())
+        put("drivingModeAutoCenter", settings.drivingModeAutoCenter.first())
+        put("drivingModeAutoZoom", settings.drivingModeAutoZoom.first())
+        put("defaultMapZoom", settings.defaultMapZoom.first())
+        put("mapSegmentRadiusMeters", settings.mapSegmentRadiusMeters.first())
+        put("safeColorHex", settings.safeColorHex.first())
+        put("soonColorHex", settings.soonColorHex.first())
+        put("imminentColorHex", settings.imminentColorHex.first())
+        put("activeColorHex", settings.activeColorHex.first())
+        put("mapStyleMode", settings.mapStyleMode.first())
+        put("wifiOnlyRefresh", settings.wifiOnlyRefresh.first())
+        put("bluetoothAutoDropPin", settings.bluetoothAutoDropPin.first())
+        put("bluetoothAutoUnparkOnReconnect", settings.bluetoothAutoUnparkOnReconnect.first())
+        put("showImminentCountdown", settings.showImminentCountdown.first())
+        put("showRppZoneLabels", settings.showRppZoneLabels.first())
+    }
+
+    val root = JSONObject().apply {
+        put("backupVersion", BACKUP_VERSION)
+        put("exportedAtMillis", System.currentTimeMillis())
+        put("cars", carsJson)
+        put("savedLocations", locationsJson)
+        put("scheduleOverrides", overridesJson)
+        put("settings", settingsJson)
+    }
+    return root.toString(2)
+}
+
+/**
+ * Imports a backup additively — inserts cars/locations/overrides without touching what's
+ * already there (so importing twice, or onto a phone that already has data, just adds
+ * duplicates rather than silently deleting anything). Settings values are applied directly
+ * since those are singletons, not a list, so "import" and "overwrite" mean the same thing
+ * for them.
+ */
+suspend fun importBackupJson(context: Context, json: String): Result<Unit> = runCatching {
+    val root = JSONObject(json)
+    val db = AppDatabase.getInstance(context)
+    val settings = SettingsRepository(context)
+
+    root.optJSONArray("cars")?.let { carsJson ->
+        for (i in 0 until carsJson.length()) {
+            val c = carsJson.getJSONObject(i)
+            db.carDao().insert(
+                Car(
+                    name = c.getString("name"),
+                    isDefault = c.optBoolean("isDefault", false),
+                    bluetoothDeviceAddress = c.optStringOrNull("bluetoothDeviceAddress"),
+                    colorHex = c.optStringOrNull("colorHex"),
+                    iconEmoji = c.optStringOrNull("iconEmoji")
+                )
+            )
+        }
+    }
+
+    root.optJSONArray("savedLocations")?.let { locationsJson ->
+        for (i in 0 until locationsJson.length()) {
+            val l = locationsJson.getJSONObject(i)
+            db.savedLocationDao().insert(
+                SavedLocation(name = l.getString("name"), lat = l.getDouble("lat"), lng = l.getDouble("lng"))
+            )
+        }
+    }
+
+    root.optJSONArray("scheduleOverrides")?.let { overridesJson ->
+        for (i in 0 until overridesJson.length()) {
+            val o = overridesJson.getJSONObject(i)
+            db.scheduleOverrideDao().upsert(
+                ScheduleOverride(
+                    blockSweepId = o.getString("blockSweepId"),
+                    fullName = o.getString("fullName"),
+                    week1 = o.getBoolean("week1"), week2 = o.getBoolean("week2"),
+                    week3 = o.getBoolean("week3"), week4 = o.getBoolean("week4"),
+                    week5 = o.getBoolean("week5"),
+                    fromHour = o.getInt("fromHour"), toHour = o.getInt("toHour"),
+                    notes = o.optStringOrNull("notes")
+                )
+            )
+        }
+    }
+
+    root.optJSONObject("settings")?.let { s ->
+        if (s.has("alwaysAskCar")) settings.setAlwaysAskCar(s.getBoolean("alwaysAskCar"))
+        if (s.has("notificationOffsetMinutes")) settings.setNotificationOffsetMinutes(s.getInt("notificationOffsetMinutes"))
+        if (s.has("urgentReminderEnabled")) settings.setUrgentReminderEnabled(s.getBoolean("urgentReminderEnabled"))
+        if (s.has("urgentOffsetMinutes")) settings.setUrgentOffsetMinutes(s.getInt("urgentOffsetMinutes"))
+        if (s.has("soonThresholdDays")) settings.setSoonThresholdDays(s.getDouble("soonThresholdDays").toFloat())
+        if (s.has("imminentThresholdDays")) settings.setImminentThresholdDays(s.getDouble("imminentThresholdDays").toFloat())
+        if (s.has("refreshIntervalHours")) settings.setRefreshIntervalHours(s.getInt("refreshIntervalHours"))
+        if (s.has("drivingModeZoom")) settings.setDrivingModeZoom(s.getDouble("drivingModeZoom").toFloat())
+        if (s.has("drivingModeAutoCenter")) settings.setDrivingModeAutoCenter(s.getBoolean("drivingModeAutoCenter"))
+        if (s.has("drivingModeAutoZoom")) settings.setDrivingModeAutoZoom(s.getBoolean("drivingModeAutoZoom"))
+        if (s.has("defaultMapZoom")) settings.setDefaultMapZoom(s.getDouble("defaultMapZoom").toFloat())
+        if (s.has("mapSegmentRadiusMeters")) settings.setMapSegmentRadiusMeters(s.getInt("mapSegmentRadiusMeters"))
+        if (s.has("mapStyleMode")) settings.setMapStyleMode(s.getString("mapStyleMode"))
+        if (s.has("wifiOnlyRefresh")) settings.setWifiOnlyRefresh(s.getBoolean("wifiOnlyRefresh"))
+        if (s.has("bluetoothAutoDropPin")) settings.setBluetoothAutoDropPin(s.getBoolean("bluetoothAutoDropPin"))
+        if (s.has("bluetoothAutoUnparkOnReconnect")) settings.setBluetoothAutoUnparkOnReconnect(s.getBoolean("bluetoothAutoUnparkOnReconnect"))
+        if (s.has("showImminentCountdown")) settings.setShowImminentCountdown(s.getBoolean("showImminentCountdown"))
+        if (s.has("showRppZoneLabels")) settings.setShowRppZoneLabels(s.getBoolean("showRppZoneLabels"))
+        // The four status colors are restored together via swapAssignment-preserving
+        // setSweepStatusColors, rather than four independent writes, so the pairwise-distinct
+        // invariant holds even if the imported values happen to collide with current ones.
+        if (s.has("safeColorHex") && s.has("soonColorHex") && s.has("imminentColorHex") && s.has("activeColorHex")) {
+            settings.setSweepStatusColors(
+                SweepStatusColors(
+                    safeHex = s.getString("safeColorHex"),
+                    soonHex = s.getString("soonColorHex"),
+                    imminentHex = s.getString("imminentColorHex"),
+                    activeHex = s.getString("activeColorHex")
+                )
+            )
+        }
+    }
+}

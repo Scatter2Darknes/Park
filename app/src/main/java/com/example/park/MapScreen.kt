@@ -1,0 +1,1539 @@
+package com.example.park
+
+import android.Manifest
+import android.app.AlarmManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+
+// Vertical space reserved at the top of the map for the Settings/overflow icons (which sit at
+// padding(24.dp) plus their own height), so the parked-cars banner never overlaps them
+// regardless of banner content width or the icons' exact rendered size.
+private val TOP_BANNER_CLEARANCE = 75.dp
+
+// GPS bearing derived from movement direction is noisy/unreliable below walking speed —
+// below this threshold, driving mode holds the last known good heading instead of rotating
+// to a spurious one (e.g. stopped at a light, in slow traffic).
+private const val BEARING_TRUST_SPEED_MPS = 1.0f
+
+// Rough meters-per-degree-of-latitude, used only to convert the Settings radius (meters,
+// user-facing) into the degree-based bounding box loadAndDrawSegments actually uses.
+private const val METERS_PER_DEGREE = 111_320.0
+
+// If GPS fixes stop arriving for longer than this while driving, assume a tunnel (or similar
+// signal-blocking environment) rather than routine GPS noise. Was 8s, which turned out to be
+// way too tight in practice: continuous fixes come from LocationManager.GPS_PROVIDER alone
+// (no network/fused blending), and raw satellite GPS routinely has multi-second gaps in a
+// dense city — tall buildings, freeway underpasses, hills — that aren't remotely a tunnel.
+// Real-world driving on the S25 confirmed this: repeated false triggers caused a visible
+// full-screen "flicker" as the map's tile source and floating-icon tint flipped dark and
+// back, sometimes several times a minute. Raised to 20s, trading slower detection of a
+// genuine tunnel for many fewer false positives from ordinary urban GPS jitter — SF doesn't
+// have many long highway tunnels, so a few extra seconds before flipping dark isn't a big
+// loss, but repeated false flickers during normal surface-street driving was a real problem.
+private const val TUNNEL_GAP_THRESHOLD_MS = 20000L
+
+// How often onRawLocation is allowed to actually trigger a segment reload while driving —
+// a throttle, not a debounce: fixes arrive roughly every DRIVING_MIN_TIME_MS (1s), so a
+// debounce (wait for fixes to STOP) would never fire during continuous motion at all. 2.5s
+// is frequent enough that the colored streets keep pace with the car at ordinary city
+// speeds, without re-querying Room and redrawing every single overlay on every 1s GPS tick.
+private const val SEGMENT_RELOAD_THROTTLE_MS = 2500L
+
+fun ensureExactAlarmPermission(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        if (!alarmManager.canScheduleExactAlarms()) {
+            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                data = android.net.Uri.parse("package:${context.packageName}")
+            }
+            context.startActivity(intent)
+        }
+    }
+}
+@Composable
+fun MapScreen(
+    onNavigateToManageCars: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onNavigateToSavedLocations: () -> Unit,
+    initialCenter: LatLng? = null,
+    onInitialCenterConsumed: () -> Unit = {},
+    pendingAutoDetect: PendingAutoDetect? = null,
+    onPendingAutoDetectConsumed: () -> Unit = {},
+    pendingSaveLocationName: String? = null,
+    onPendingSaveLocationConsumed: () -> Unit = {},
+    isDarkTheme: Boolean
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> hasLocationPermission = granted }
+
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission) permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
+    // POST_NOTIFICATIONS is no longer auto-requested here at first launch — deferred to
+    // Settings (a toggle there now, mirroring the battery/background-location pattern) since
+    // Android's own guidance discourages asking before the person has any context for why,
+    // and this was stacking a second system permission dialog right on top of the location
+    // one and the sync setup dialog on every cold start.
+    LaunchedEffect(Unit) {
+        ensureExactAlarmPermission(context)
+    }
+
+
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+    var locationOverlayRef by remember { mutableStateOf<MyLocationNewOverlay?>(null) }
+    var locationProviderRef by remember { mutableStateOf<SingleSourceLocationProvider?>(null) }
+    var debounceJob by remember { mutableStateOf<Job?>(null) }
+    var selectedSegment by remember { mutableStateOf<StreetSegment?>(null) }
+    var tapHighlightJob by remember { mutableStateOf<Job?>(null) }
+    var parkingFlowState by remember { mutableStateOf<ParkingFlowState>(ParkingFlowState.Hidden) }
+    var activeParkedCars by remember { mutableStateOf<List<CarWithStatus>>(emptyList()) }
+    var parkedBannerExpanded by remember { mutableStateOf(false) }
+    // Keyed lookup for the Bluetooth connection chip — activeParkedCars only covers currently
+    // parked cars, but a BT-connected car (i.e. currently being driven) is by definition not
+    // parked, so its name/style has to come from the full car list instead.
+    var allCarsById by remember { mutableStateOf<Map<Long, Car>>(emptyMap()) }
+    val carLinkState by BluetoothConnectionCenter.linkState.collectAsState()
+    val connectedDeviceNames by BluetoothConnectionCenter.connectedDeviceNames.collectAsState()
+    // The single car (if any) currently resolved as "actually being driven" via Bluetooth —
+    // shared by the current-location icon, the compact status pill, and the connect/disconnect
+    // toast, so all three always agree on which car is active.
+    val activeCar = (carLinkState as? CarLinkState.Resolved)?.carId?.let { allCarsById[it] }
+
+    // Transient "Connected to X" / "X parked" toast — shown briefly right at the moment of a
+    // connect/disconnect event, separate from the persistent (but much smaller) pill below,
+    // which is the ongoing "still connected" indicator once the toast has faded.
+    var toastMessage by remember { mutableStateOf<String?>(null) }
+    var pillExpanded by remember { mutableStateOf(false) }
+    var previousActiveCar by remember { mutableStateOf<Car?>(null) }
+    // Keyed on the full carLinkState (not just activeCar?.id): Ambiguous also makes
+    // activeCar null since it isn't Resolved, but that's not a disconnect — a second car
+    // connecting while one was already active used to fire a false "X parked" toast here,
+    // even though X was still connected and driving. The ambiguity banner is the correct UI
+    // for that transition, so it's explicitly a no-op below.
+    LaunchedEffect(carLinkState) {
+        when (val state = carLinkState) {
+            is CarLinkState.Resolved -> {
+                // Not just activeCar?.name here: allCarsById is populated by a separate,
+                // async refreshActiveParkedCars() call, which can still be in flight the very
+                // first time this fires (e.g. the cold-start Bluetooth resync in ParkApp can
+                // resolve carLinkState before that load completes) — activeCar would read as
+                // null and this toast printed the literal text "null active". Falling back to
+                // a direct DB lookup for just this one car sidesteps the race instead of
+                // depending on allCarsById's load having already finished.
+                val carName = allCarsById[state.carId]?.name
+                    ?: AppDatabase.getInstance(context).carDao().getAll()
+                        .firstOrNull { it.id == state.carId }?.name
+                    ?: "car"
+                toastMessage = "Connected to ${connectedDeviceNames[state.carId] ?: "device"} \u2014 $carName active"
+            }
+            is CarLinkState.None ->
+                if (previousActiveCar != null) toastMessage = "${previousActiveCar?.name} parked"
+            is CarLinkState.Ambiguous -> {} // ambiguity banner handles this case instead
+        }
+        previousActiveCar = activeCar
+        if (toastMessage != null) {
+            delay(3000)
+            toastMessage = null
+        }
+    }
+    var pinDropCallback by remember { mutableStateOf<((GeoPoint) -> Unit)?>(null) }
+
+    // Mode 1 ("I'm Parking Right Now"): rotates the map to align with travel direction and
+    // zooms in closer, so the map orients like a driving-nav app while you're searching for
+    // a spot. lastKnownHeading persists across low-speed GPS fixes so rotation holds steady
+    // rather than snapping to a noisy bearing at a stoplight or in slow traffic.
+    // Source of truth is DrivingModeState (app-level), not a local var — this needs to be
+    // externally settable (e.g. auto-turning off on a Bluetooth disconnect, from a
+    // BroadcastReceiver with no access to this composable's own state) as well as
+    // toggle-from-the-map, and a one-way mirror out to DrivingModeState (the previous setup)
+    // can't be pushed to from outside. collectAsState keeps this screen in sync with whichever
+    // side changes it.
+    val drivingModeActive by DrivingModeState.isActive.collectAsState()
+    var lastKnownHeading by remember { mutableStateOf(0f) }
+    var zoomBeforeDriving by remember { mutableStateOf<Double?>(null) }
+    var drivingModeZoom by remember { mutableStateOf(SettingsDefaults.DRIVING_MODE_ZOOM) }
+    var drivingModeAutoCenter by remember { mutableStateOf(SettingsDefaults.DRIVING_MODE_AUTO_CENTER) }
+    var drivingModeAutoZoom by remember { mutableStateOf(SettingsDefaults.DRIVING_MODE_AUTO_ZOOM) }
+    var defaultMapZoom by remember { mutableStateOf(SettingsDefaults.DEFAULT_MAP_ZOOM) }
+
+    // Bounding-box radius (in degrees) used whenever segments are loaded/drawn around a
+    // point — configurable in Settings as meters and converted here, since a degree isn't a
+    // meaningful unit for the person setting it.
+    var segmentRadiusDegrees by remember { mutableStateOf(SettingsDefaults.MAP_SEGMENT_RADIUS_METERS / METERS_PER_DEGREE) }
+    var lastRefreshMillis by remember { mutableStateOf<Long?>(null) }
+
+    // Reloads the full "who's parked where" summary — every car with a live parked state,
+    // soonest-sweep-first — rather than tracking a single car. Called after every parking-flow
+    // completion so the banner (and its expanded list) stay current.
+    //
+    // Also enqueues a widget refresh here, piggybacking on the exact same call sites and
+    // timing the in-app banner already relies on to stay current — rather than requiring every
+    // mutation path to separately remember its own enqueueWidgetRefresh() call (a car-edit
+    // save in Manage Cars once missed exactly that). This is a belt-and-suspenders addition on
+    // top of the calls already inside saveParkedState/unsubscribeParking/deleteCarCompletely,
+    // not a replacement for them — those cover mutations that don't go through MapScreen at
+    // all (Manage Cars, Bluetooth). Redundant back-to-back calls (e.g. saveParkedState then
+    // this) are harmless: enqueueWidgetRefresh uses ExistingWorkPolicy.REPLACE, so they
+    // collapse into whichever one actually runs last rather than racing each other.
+    suspend fun refreshActiveParkedCars() {
+        activeParkedCars = loadActiveParkedCars(context)
+        allCarsById = AppDatabase.getInstance(context).carDao().getAll().associateBy { it.id }
+        enqueueWidgetRefresh(context)
+    }
+
+    // Settings-backed state. Loaded once on entry — MapScreen fully remounts when
+    // navigating back from Settings (a known tradeoff of the current enum-based screen
+    // switching), so a fresh load here is sufficient to pick up any changes made there.
+    var sweepThresholds by remember { mutableStateOf(SweepThresholds()) }
+    var statusColors by remember { mutableStateOf(SweepStatusColors()) }
+    var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
+    var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
+    // "CAUTIOUS" (default) keeps the original two-dialog confirm-then-pin flow; "SIMPLE"
+    // collapses it into QuickParkConfirmDialog for someone who's decided they'd rather trade
+    // that extra checkpoint for fewer taps. See ParkingNotificationsSection in SettingsScreen.
+    var parkingConfirmationStyle by remember { mutableStateOf(SettingsDefaults.PARKING_CONFIRMATION_STYLE) }
+
+    // Tunnel-style GPS-loss detection (mirrors Google Maps): if fixes stop arriving for a
+    // while during driving mode, assume a dark environment and force dark map tiles
+    // regardless of what the resolved auto-mode would otherwise pick, since a suspected
+    // tunnel means "it's dark right now" independent of the clock or system theme.
+    var lastFixTimestamp by remember { mutableStateOf(System.currentTimeMillis()) }
+    // Tracks the last time onRawLocation actually triggered a segment reload, so that path
+    // can be throttled (fire on a fixed cadence) rather than debounced (wait for fixes to
+    // stop arriving) — see the onRawLocation hook below for why debounce was wrong here.
+    var lastAutoReloadAtMs by remember { mutableStateOf(0L) }
+    var suspectedTunnel by remember { mutableStateOf(false) }
+
+    var mapSettingsLoaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        sweepThresholds = SettingsRepository(context).sweepThresholdsSnapshot()
+        statusColors = SettingsRepository(context).sweepStatusColorsSnapshot()
+        drivingModeZoom = SettingsRepository(context).drivingModeZoom.first()
+        drivingModeAutoCenter = SettingsRepository(context).drivingModeAutoCenter.first()
+        drivingModeAutoZoom = SettingsRepository(context).drivingModeAutoZoom.first()
+        defaultMapZoom = SettingsRepository(context).defaultMapZoom.first()
+        segmentRadiusDegrees = SettingsRepository(context).mapSegmentRadiusMeters.first() / METERS_PER_DEGREE
+        lastRefreshMillis = SettingsRepository(context).lastRefreshMillis.first()
+        showImminentCountdown = SettingsRepository(context).showImminentCountdown.first()
+        showRppZoneLabels = SettingsRepository(context).showRppZoneLabels.first()
+        parkingConfirmationStyle = SettingsRepository(context).parkingConfirmationStyle.first()
+        // The map (below) isn't created until this flips true. Without this gate, the
+        // AndroidView factory — which runs synchronously on first composition, before this
+        // suspend block has a chance to finish reading from DataStore — was calling
+        // controller.setZoom(defaultMapZoom...) while defaultMapZoom still held its
+        // SettingsDefaults fallback rather than what's actually saved in Settings. The
+        // factory only ever runs once, so a value corrected here moments later was too late
+        // to matter; gating creation on mapSettingsLoaded is what actually fixes it.
+        mapSettingsLoaded = true
+        onInitialCenterConsumed()
+    }
+
+    // Color Theme (Day/Night/Automatic-matches-system/Automatic-time-of-day) is now resolved
+    // once in MainActivity and shared with the whole app via isDarkTheme, so every screen
+    // agrees — the map layers one more thing on top just for its own tiles: a suspected
+    // tunnel forces dark regardless of isDarkTheme, since Settings/Manage Cars shouldn't
+    // flip to dark just because you're driving through a tunnel right now.
+    val resolvedTileSource = remember(isDarkTheme, suspectedTunnel) {
+        if (isDarkTheme || suspectedTunnel) buildStadiaDarkTileSource(context) else buildStadiaTileSource(context)
+    }
+    // The gear/overflow icons float directly over map tiles with no button background of
+    // their own, so their color needs to track the MAP's actual current darkness (theme +
+    // tunnel override combined), not just the app theme alone.
+    val isMapDark = isDarkTheme || suspectedTunnel
+    val floatingIconTint = if (isMapDark) Color.White else Color.Black
+    LaunchedEffect(resolvedTileSource) {
+        mapViewRef?.let { mv ->
+            mv.setTileSource(resolvedTileSource)
+            // Force-clear so no stale tile (from the previous style) lingers on screen —
+            // without this, a switch could look like it silently failed even when the new
+            // source is loading correctly, since osmdroid may not always evict an
+            // already-rendered tile just because the source changed.
+            mv.tileProvider.clearTileCache()
+            mv.invalidate()
+        }
+    }
+
+    // The location marker's icon (car-specific when linked, generic pin otherwise) is owned
+    // entirely by the AndroidView's own `update` block further below — a separate
+    // LaunchedEffect(isMapDark) used to also write to this same overlay (rebuilding a
+    // generic, theme-tinted dot/arrow whenever isMapDark changed), and since that effect runs
+    // AFTER the AndroidView's synchronous `update` callback within the same recomposition, it
+    // always won, silently clobbering the correct car-specific icon back to a generic one —
+    // reported as "the current-location icon resets to the default dart even while still
+    // showing 'currently driving'." Removed rather than merged: neither buildConnectedLocationIcon
+    // nor buildDefaultLocationIcon actually needs a dark/light variant (they're colored
+    // per-car/pin icons, not a plain dot relying on outline contrast), so there was nothing
+    // this effect did that `update` doesn't already fully cover.
+
+    // Single dispatcher for every segment tap. When the manual picker's "select from map"
+    // path is active, a tap now goes through the same "is this the correct side?" confirmation
+    // (with the same tap-pop halo used for the ordinary detail-sheet tap) before the existing
+    // "add an exact pin?" step — picking a street via map had no confirmation at all before,
+    // unlike every other selection path (the distance-sorted list, the manual picker) which
+    // all show the street/side back to the user before committing to it.
+    fun handleSegmentTap(seg: StreetSegment) {
+        if (drivingModeActive) return // taps ignored while driving — map gestures shouldn't be mistaken for taps mid-drive
+        val state = parkingFlowState
+        tapHighlightJob?.cancel()
+        mapViewRef?.let { mv -> tapHighlightJob = showTappedSegmentHighlight(mv, seg, isMapDark, scope) }
+        if (state is ParkingFlowState.PickingViaMap) {
+            parkingFlowState = ParkingFlowState.ConfirmingSide(state.carId, seg, state.originPoint)
+        } else {
+            selectedSegment = seg
+        }
+    }
+
+    // Only meaningful while actively driving with frequent fixes expected — outside driving
+    // mode, a GPS gap is just normal idle behavior, not evidence of a tunnel.
+    LaunchedEffect(drivingModeActive) {
+        if (!drivingModeActive) {
+            suspectedTunnel = false
+        } else {
+            while (true) {
+                delay(2000L)
+                if (System.currentTimeMillis() - lastFixTimestamp > TUNNEL_GAP_THRESHOLD_MS) {
+                    suspectedTunnel = true
+                }
+            }
+        }
+    }
+
+    // Explains the suspectedTunnel-driven dark flip via the same transient toast used for
+    // Bluetooth connect/disconnect — without this, the map going dark on its own (correctly,
+    // in response to a real GPS gap) read as an unexplained bug rather than an intentional
+    // response to a real condition. Shares toastMessage/the 3s auto-clear with the BT toast
+    // above; the two are rare enough to coincide that the minor race (one clearing the
+    // other's message slightly early) isn't worth extra guarding against, consistent with
+    // how this file already treats this class of purely-cosmetic concern elsewhere.
+    var suspectedTunnelToastArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(suspectedTunnel) {
+        if (!suspectedTunnelToastArmed) {
+            // First composition only establishes a baseline — nothing has actually changed
+            // yet, so toasting here would say "GPS regained" for a transition that never
+            // happened. Every later firing of this effect is a real transition.
+            suspectedTunnelToastArmed = true
+            return@LaunchedEffect
+        }
+        toastMessage = if (suspectedTunnel) {
+            "GPS lost \u2014 dimming map"
+        } else {
+            "GPS regained \u2014 map back to normal"
+        }
+        delay(3000)
+        toastMessage = null
+    }
+
+    // Shared by the GPS-based "I'm Parked" button and "Use saved location" — the only
+    // difference between them is where the starting point comes from.
+    fun startParkingFlow(point: LatLng) {
+        scope.launch {
+            val settingsRepo = SettingsRepository(context)
+            val alwaysAsk = settingsRepo.alwaysAskCar.first()
+            val allCars = AppDatabase.getInstance(context).carDao().getAll()
+            val defaultCar = allCars.firstOrNull { it.isDefault }
+
+            parkingFlowState = when {
+                allCars.isEmpty() -> ParkingFlowState.ChoosingCar(point)
+                alwaysAsk -> ParkingFlowState.ChoosingCar(point)
+                allCars.size == 1 -> proceedToMatching(context, allCars.first().id, point)
+                defaultCar != null -> proceedToMatching(context, defaultCar.id, point)
+                else -> ParkingFlowState.ChoosingCar(point) // multiple cars, none marked default — genuinely ambiguous
+            }
+        }
+    }
+
+    var showOfflineDialog by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var offlineTileTotal by remember { mutableStateOf(0) }
+    var offlineTileDownloaded by remember { mutableStateOf<Int?>(null) }
+    var offlineStatusMessage by remember { mutableStateOf<String?>(null) }
+
+    // Street-data sync status (totalSegmentCount, isFullySynced, isSyncRunning, statusMessage,
+    // isBusy) now lives in StreetDataSyncCenter (app-scoped) rather than as local state here —
+    // it used to live in this screen, but that meant the status was invisible on every other
+    // screen, and navigating away from Map mid-refresh/import actually cancelled it
+    // (rememberCoroutineScope() is cancelled when its composable leaves composition; the
+    // shared center's appScope never is). nearbySegmentCount stays local since it's inherently
+    // about this screen's current viewport: it distinguishes "nothing has ever synced"
+    // (isFullySynced false) from "there's just no DataSF coverage in the area currently being
+    // viewed" (nearbySegmentCount is 0 while the sync is otherwise done) — those need
+    // different messages, since one means "wait" and the other means "pan somewhere else."
+    var nearbySegmentCount by remember { mutableStateOf<Int?>(null) }
+    val totalSegmentCount by StreetDataSyncCenter.totalSegmentCount.collectAsState()
+    val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
+    val isSyncRunning by StreetDataSyncCenter.isSyncRunning.collectAsState()
+    val isFullySynced by StreetDataSyncCenter.isFullySynced.collectAsState()
+    val isSyncBusy by StreetDataSyncCenter.isBusy.collectAsState()
+
+    // Drives the pill's one-time "✅ Data successfully loaded" state right after a sync
+    // actually finishes — as opposed to showing that message on every ordinary app launch
+    // where the data was already synced from a previous session. previousIsFullySynced's
+    // initial value is captured fresh from isFullySynced itself, so if this screen mounts
+    // already-synced (the normal case), no false "just finished" transition is detected.
+    // isFullySynced is otherwise a one-way latch (see StreetDataSyncCenter), so this only
+    // re-fires in practice via the debug "Show Sync Setup UI Again" Settings button.
+    var showSyncSuccess by remember { mutableStateOf(false) }
+    var previousIsFullySynced by remember { mutableStateOf(isFullySynced) }
+    LaunchedEffect(isFullySynced) {
+        if (isFullySynced && !previousIsFullySynced) {
+            showSyncSuccess = true
+        }
+        previousIsFullySynced = isFullySynced
+    }
+
+    LaunchedEffect(Unit) {
+        refreshActiveParkedCars()
+    }
+
+    // Live sync: a Bluetooth park/unpark can happen while this exact screen is already open
+    // (car parked/unparked in the background), so this can't wait for the next screen mount
+    // the way the initial LaunchedEffect(Unit) above does. Collects the same version-bump
+    // BluetoothConnectionCenter already exposes for the connection chip, and additionally
+    // redraws the map overlays directly — refreshActiveParkedCars() alone only updates the
+    // banner/widget data, not the drawn polylines/pins on the live MapView.
+    val parkedStateVersion by BluetoothConnectionCenter.parkedStateVersion.collectAsState()
+    LaunchedEffect(parkedStateVersion) {
+        if (parkedStateVersion != 0L) {
+            refreshActiveParkedCars()
+            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context, locationOverlayRef) }
+        }
+    }
+
+    // Lets the Bluetooth receivers know this screen (with its live connection toast/pill/ring)
+    // is actually the thing on screen right now, so they can skip posting a redundant system
+    // notification for the same park/unpark/connect event. ON_RESUME/ON_PAUSE (not just
+    // composition enter/dispose) because backgrounding the whole app — home button, screen
+    // off — doesn't dispose this composable, only pausing/resuming its lifecycle owner.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> MapScreenVisibility.setVisible(true)
+                Lifecycle.Event.ON_PAUSE -> MapScreenVisibility.setVisible(false)
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            MapScreenVisibility.setVisible(false) // navigated to another screen entirely
+        }
+    }
+
+    // A Bluetooth-disconnect auto-detect that couldn't confidently match a segment opens the
+    // app here to finish the job — re-running the same matching used everywhere else rather
+    // than trusting a stale precomputed result, since segment data may have refreshed since.
+    LaunchedEffect(pendingAutoDetect) {
+        pendingAutoDetect?.let { pending ->
+            parkingFlowState = proceedToMatching(context, pending.carId, pending.point)
+            onPendingAutoDetectConsumed()
+        }
+    }
+
+    // "Pick from map" for a new saved location, triggered from SavedLocationsScreen. Reuses
+    // the same pinDropCallback mechanism as the parking flow's manual pin drop — these are
+    // mutually exclusive in practice (a person isn't mid-parking-flow and mid-saved-location
+    // setup at once), so sharing the single callback slot is fine.
+    LaunchedEffect(pendingSaveLocationName) {
+        val name = pendingSaveLocationName ?: return@LaunchedEffect
+        pinDropCallback = { tappedPoint ->
+            scope.launch {
+                AppDatabase.getInstance(context).savedLocationDao().insert(
+                    SavedLocation(name = name, lat = tappedPoint.latitude, lng = tappedPoint.longitude)
+                )
+                pinDropCallback = null
+                onPendingSaveLocationConsumed()
+                onNavigateToSavedLocations() // back to the list so the new entry is visible immediately
+            }
+        }
+    }
+
+    // Owns driving mode's heading/speed hook into the single shared location provider (see
+    // SingleSourceLocationProvider) and the map rotation/zoom it drives. Keyed on
+    // drivingModeActive so toggling it on tightens the GPS update rate and zooms in, and
+    // toggling it off (or leaving the screen) cleanly tears both back down via onDispose —
+    // the correct Compose primitive for a callback-based resource, as opposed to
+    // LaunchedEffect's coroutine model.
+    DisposableEffect(drivingModeActive) {
+        if (!drivingModeActive || !hasLocationPermission) {
+            onDispose {}
+        } else {
+            if (drivingModeAutoZoom) {
+                zoomBeforeDriving = mapViewRef?.zoomLevelDouble
+                mapViewRef?.controller?.setZoom(drivingModeZoom.toDouble())
+            }
+            if (drivingModeAutoCenter) {
+                // Re-engage follow mode explicitly: osmdroid's MyLocationNewOverlay disables
+                // it automatically on any manual map drag, so without this, driving mode
+                // wouldn't recenter at all if the person had panned around beforehand.
+                locationOverlayRef?.enableFollowLocation()
+            }
+
+            // Tighten the shared provider's update rate for smooth rotation/following, and
+            // hook into its raw fixes for heading — no separate requestLocationUpdates call
+            // needed, since this reuses the exact same GPS subscription already feeding the
+            // blue-dot overlay.
+            locationProviderRef?.setUpdateCriteria(
+                SingleSourceLocationProvider.DRIVING_MIN_TIME_MS,
+                SingleSourceLocationProvider.DRIVING_MIN_DISTANCE_M
+            )
+            locationProviderRef?.onRawLocation = { location ->
+                lastFixTimestamp = System.currentTimeMillis()
+                suspectedTunnel = false
+
+                if (location.hasSpeed() && location.speed > BEARING_TRUST_SPEED_MPS && location.hasBearing()) {
+                    lastKnownHeading = location.bearing
+                }
+                // Rotate to the best-known heading on every fix, even a low-speed one —
+                // holding the last GOOD heading (rather than freezing the whole hook) is
+                // what makes "hold steady at a stoplight" work correctly.
+                mapViewRef?.setMapOrientation(-lastKnownHeading)
+
+                // Drive segment reloading directly off GPS fixes rather than relying solely
+                // on MapListener.onScroll: that callback is tied to osmdroid's own pan-
+                // gesture handling and isn't guaranteed to fire reliably for the SILENT
+                // camera recentering follow-mode performs internally on each fix — which is
+                // exactly what was causing segments to stop appearing once the driver moved
+                // past the area loaded before driving mode started.
+                //
+                // THROTTLED, not debounced: this used to cancel+restart a 3s delay on every
+                // single fix, same as the onScroll debounce below — but fixes arrive roughly
+                // every DRIVING_MIN_TIME_MS (1s) while driving, faster than that 3s window
+                // could ever complete, so it never actually fired during continuous motion.
+                // Segments only ever caught up once the car stopped moving for a full 3
+                // uninterrupted seconds (a red light, parking), which is exactly the
+                // reported "segment center lags behind the current location" bug — the
+                // reload wasn't slow, it just never ran at all while still driving. Firing
+                // immediately once the throttle window has elapsed (rather than waiting out
+                // yet another delay once it has) is what actually keeps pace with a moving car.
+                val currentPoint = LatLng(location.latitude, location.longitude)
+                val now = System.currentTimeMillis()
+                if (now - lastAutoReloadAtMs >= SEGMENT_RELOAD_THROTTLE_MS) {
+                    lastAutoReloadAtMs = now
+                    // Still shares debounceJob with onScroll below — cancelling whichever
+                    // fired most recently — so the two triggers stay mutually exclusive and
+                    // never run two concurrent reloads against the same MapView.
+                    debounceJob?.cancel()
+                    debounceJob = scope.launch {
+                        mapViewRef?.let { mv ->
+                            nearbySegmentCount = reloadSegmentsAndMarkers(
+                                mv, context, GeoPoint(currentPoint.lat, currentPoint.lng),
+                                radiusDegrees = segmentRadiusDegrees,
+                                isPinDropActive = { pinDropCallback != null },
+                                thresholds = sweepThresholds,
+                                statusColors = statusColors,
+                                showCountdownLabels = showImminentCountdown,
+                                showRppZoneLabels = showRppZoneLabels,
+                                onSegmentClick = ::handleSegmentTap,
+                                locationOverlay = locationOverlayRef
+                            )
+                        }
+                    }
+                }
+            }
+
+            onDispose {
+                locationProviderRef?.onRawLocation = null
+                locationProviderRef?.setUpdateCriteria(
+                    SingleSourceLocationProvider.IDLE_MIN_TIME_MS,
+                    SingleSourceLocationProvider.IDLE_MIN_DISTANCE_M
+                )
+                mapViewRef?.setMapOrientation(0f)
+                zoomBeforeDriving?.let { mapViewRef?.controller?.setZoom(it) }
+            }
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (hasLocationPermission && mapSettingsLoaded) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    MapView(ctx).apply {
+                        setTileSource(resolvedTileSource)
+                        setMultiTouchControls(true)
+                        setBuiltInZoomControls(false)
+                        controller.setZoom(defaultMapZoom.toDouble())
+
+                        val locationManager = ctx.getSystemService(LocationManager::class.java)
+                        val lastLocation = try {
+                            locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                        } catch (e: SecurityException) { null }
+
+                        val startPoint = when {
+                            initialCenter != null -> GeoPoint(initialCenter.lat, initialCenter.lng)
+                            lastLocation != null -> GeoPoint(lastLocation.latitude, lastLocation.longitude)
+                            else -> GeoPoint(37.7749, -122.4194)
+                        }
+                        controller.setCenter(startPoint)
+
+                        // Single shared GPS subscription for the whole screen (see
+                        // SingleSourceLocationProvider) — driving mode taps into this same
+                        // provider for heading/speed instead of registering its own separate
+                        // location listener, and dials the update rate up/down by context.
+                        val locationProvider = SingleSourceLocationProvider(locationManager)
+                        locationProviderRef = locationProvider
+                        val locationOverlay = MyLocationNewOverlay(locationProvider, this)
+                        locationOverlay.enableMyLocation()
+                        if (initialCenter == null) {
+                            // Only auto-follow live GPS when we're not intentionally viewing a
+                            // specific car's parked spot — otherwise the map would immediately
+                            // snap away from the location the user navigated here to see. The
+                            // recenter FAB still re-enables following at any time.
+                            locationOverlay.enableFollowLocation()
+                        }
+                        overlays.add(locationOverlay)
+                        locationOverlayRef = locationOverlay
+                        overlays.add(TapCaptureOverlay { pinDropCallback })
+
+                        addMapListener(object : MapListener {
+                            override fun onScroll(event: ScrollEvent?): Boolean {
+                                // While driving, follow-mode recenters the camera on
+                                // essentially every GPS fix (~1/s), which fires this callback
+                                // just as often. Since this shares debounceJob with
+                                // onRawLocation's own throttled reload below, letting this
+                                // reschedule its 3s debounce on every one of those fixes could
+                                // keep cancelling and re-deferring the reload indefinitely —
+                                // events arriving faster than a debounce's own delay is exactly
+                                // the failure mode onRawLocation's throttle was written to
+                                // avoid (see its comment below), and this listener was racing
+                                // it via the shared job. Reported as "drive out of the loaded
+                                // radius and the segments never catch up." onRawLocation
+                                // already keeps segments centered on the live GPS position
+                                // while driving, so this listener has nothing to add then.
+                                if (drivingModeActive) return true
+                                debounceJob?.cancel()
+                                val debounceMs = 400L
+                                debounceJob = scope.launch {
+                                    delay(debounceMs)
+                                    val center = mapCenter as GeoPoint
+                                    nearbySegmentCount = reloadSegmentsAndMarkers(
+                                        this@apply, ctx, center,
+                                        radiusDegrees = segmentRadiusDegrees,
+                                        isPinDropActive = { pinDropCallback != null },
+                                        thresholds = sweepThresholds,
+                                        statusColors = statusColors,
+                                        showCountdownLabels = showImminentCountdown,
+                                showRppZoneLabels = showRppZoneLabels,
+                                        onSegmentClick = ::handleSegmentTap,
+                                        locationOverlay = locationOverlayRef
+                                    )
+                                }
+                                return true
+                            }
+                            override fun onZoom(event: ZoomEvent?): Boolean = false
+                        })
+
+                        mapViewRef = this
+                        // Single load on startup — previously two concurrent loads raced here,
+                        // and the second one (which fed refreshParkedCarOverlays) passed no
+                        // onSegmentClick at all, so if it finished last, segment taps silently
+                        // stopped working. One call now does both, plus saved-location pins, and
+                        // (via locationOverlay below) keeps the live location dot on top instead
+                        // of buried under the segment lines this call is about to draw.
+                        scope.launch {
+                            nearbySegmentCount = reloadSegmentsAndMarkers(
+                                this@apply, ctx, startPoint,
+                                radiusDegrees = segmentRadiusDegrees,
+                                isPinDropActive = { pinDropCallback != null },
+                                thresholds = sweepThresholds,
+                                statusColors = statusColors,
+                                showCountdownLabels = showImminentCountdown,
+                                showRppZoneLabels = showRppZoneLabels,
+                                onSegmentClick = ::handleSegmentTap,
+                                locationOverlay = locationOverlay
+                            )
+                        }
+                    }
+                },
+                update = { _ ->
+                    // Reruns on every recomposition where a captured value below changed —
+                    // carLinkState/allCarsById/drivingModeActive are all read here, so a BT
+                    // connect/disconnect or a Drive-mode toggle updates the live-location
+                    // marker's icon immediately, without recreating the MapView.
+                    //
+                    // UNVERIFIED: setPersonIcon/setPersonAnchor/setDirectionArrow are real
+                    // osmdroid MyLocationNewOverlay APIs per its public docs, but — like the
+                    // other osmdroid surface noted in "Unverified-compile-risk areas" — not
+                    // something this environment can compile-check. Confirm on the S25 before
+                    // trusting this to build as-is.
+                    val iconCar = (carLinkState as? CarLinkState.Resolved)?.carId?.let { allCarsById[it] }
+                    // Deliberately NOT falling back to the default car here: "default car" is
+                    // only a fallback for skipping car-selection in the "I'm Parked" flow — it
+                    // says nothing about who's currently driving. Falling back to it here was
+                    // the actual cause of the reported desync: the default car's icon showing
+                    // at the live GPS position even while nobody was connected to it, at the
+                    // same time its (unrelated, possibly stale) parked pin was showing
+                    // elsewhere on the map — two markers for one car that visually implied
+                    // "you are here AND parked there" simultaneously. With no BT link, this is
+                    // null and buildDefaultLocationIcon/buildCarDirectionArrowBitmap(car = null)
+                    // draw the plain blue marker/arrow instead — never osmdroid's own stock
+                    // person/arrow bitmaps, since both icon slots are always supplied below.
+                    locationOverlayRef?.let { overlay ->
+                        val personBitmap = if (iconCar != null) {
+                            buildConnectedLocationIcon(context, iconCar)
+                        } else {
+                            buildDefaultLocationIcon(context)
+                        }
+                        overlay.setPersonIcon(personBitmap)
+                        overlay.setPersonAnchor(0.5f, 0.5f)
+                        // Always supplied, not just while drivingModeActive: osmdroid decides
+                        // for itself (from the GPS bearing) whether to render the person or
+                        // direction-arrow bitmap, independently of our own driving-mode flag. If
+                        // it ever switches to "arrow" while we hadn't set one, it falls back to
+                        // its own bundled default (a plain white dart, round_navigation_white_48)
+                        // which has no theme awareness and disappears on a light map.
+                        val arrowBitmap = buildCarDirectionArrowBitmap(context, iconCar)
+                        overlay.setDirectionArrow(personBitmap, arrowBitmap)
+                        overlay.setDirectionAnchor(0.5f, 0.5f)
+                    }
+                }
+            )
+
+            // Top/bottom edge glow in the active car's color — a glance-able reinforcement of
+            // "connected via Bluetooth" alongside the pill and toast, visible without reading
+            // any text. Driven by animateColorAsState (not a plain conditional) so it fades
+            // smoothly in both directions and cross-fades between two colors if the active car
+            // itself changes, rather than snapping in/out. Purely decorative — no pointer input
+            // modifiers, so it never intercepts map gestures — and placed before the buttons/
+            // pill/toast below so it sits under them rather than tinting their own colors.
+            val haloColor by animateColorAsState(
+                targetValue = activeCar?.let { carComposeColor(it) } ?: Color.Transparent,
+                animationSpec = tween(600),
+                label = "bluetoothHaloColor"
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to haloColor.copy(alpha = haloColor.alpha * 0.35f),
+                            0.06f to Color.Transparent,
+                            0.94f to Color.Transparent,
+                            1f to haloColor.copy(alpha = haloColor.alpha * 0.35f)
+                        )
+                    )
+            )
+
+            // No-DataSF-coverage-here banner. Purely informational (no pointer input), sits
+            // above the map but below the buttons/pill/toast below. The "still syncing"
+            // indicator that used to live here (plus the full-screen first-sync takeover) has
+            // moved to MainActivity as a global dialog/pill visible on every screen, not just
+            // this one — this banner stays local since it's inherently about this screen's
+            // current viewport, which a global indicator can't express.
+            if (nearbySegmentCount == 0 && isFullySynced) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Text(
+                        "No street cleaning data here \u2014 try panning toward San Francisco.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            // Mode toggle — its own corner, visually separated from the one-shot actions,
+            // and colored to signal state: amber/active when on, neutral when off.
+            Button(
+                onClick = {
+                    DrivingModeState.setActive(!drivingModeActive)
+                },
+                colors = ButtonDefaults.buttonColors(
+                    // Theme-driven (tertiary) rather than a literal amber hex, so this still
+                    // looks correct under dark mode and Android 12+ dynamic color.
+                    containerColor = if (drivingModeActive) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (drivingModeActive) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(24.dp)
+            ) {
+                Icon(
+                    if (drivingModeActive) Icons.Filled.Stop else Icons.Filled.DirectionsCar,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (drivingModeActive) "Stop" else "Drive")
+            }
+
+            // Primary action — dead center, the single most-used control in the app, colored
+            // green (echoing the map's own SAFE status color) so it reads as "the one that
+            // confirms/completes something," distinct from the neutral utility controls.
+            Button(
+                onClick = {
+                    DrivingModeState.setActive(false) // Mode 1 exits directly into Mode 2 on this tap
+                    val loc = locationOverlayRef?.myLocation
+                    if (loc == null) {
+                        android.util.Log.w("Park", "No GPS fix yet")
+                        return@Button
+                    }
+                    startParkingFlow(LatLng(loc.latitude, loc.longitude))
+                },
+                // Theme-driven (primary) rather than a literal green hex, so this still
+                // looks correct under dark mode and Android 12+ dynamic color.
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                // Dimmed and disabled (Material3's default disabled-button treatment) until
+                // street data has actually loaded — matching to a segment is meaningless with
+                // nothing to match against, and disabling it here is clearer than letting the
+                // flow run and land on "no match" for every tap.
+                enabled = isFullySynced,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 24.dp)
+            ) {
+                Text("Parked")
+            }
+
+            // Viewport utility — its own corner, opposite the mode toggle, left as the
+            // default FAB styling since that's already visually distinct from the two
+            // colored Buttons on either side of it.
+            FloatingActionButton(
+                onClick = {
+                    mapViewRef?.let { mv ->
+                        locationOverlayRef?.enableFollowLocation()
+                        locationOverlayRef?.myLocation?.let { loc -> mv.controller.animateTo(loc) }
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(24.dp)
+            ) { Icon(Icons.Filled.MyLocation, contentDescription = "Recenter on my location") }
+
+            // Compact, persistent "still connected" indicator — deliberately small and
+            // silent by default (a colored dot) so it doesn't compete with the toast above for
+            // attention; tap to expand into the same "Connected to / Linked to" detail the
+            // old always-on chip used to show permanently.
+            activeCar?.let { car ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .zIndex(10f)
+                        .navigationBarsPadding()
+                        .padding(end = 24.dp, bottom = 96.dp)
+                ) {
+                    Surface(
+                        color = carComposeColor(car),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.clickable { pillExpanded = !pillExpanded }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(carIcon(car), fontSize = 14.sp)
+                            if (pillExpanded) {
+                                Spacer(Modifier.width(6.dp))
+                                Column {
+                                    connectedDeviceNames[car.id]?.let {
+                                        Text("Connected to: $it", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    Text("Linked to: ${car.name}", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.align(Alignment.TopEnd).padding(24.dp)) {
+                IconButton(onClick = { showOverflowMenu = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = floatingIconTint)
+                }
+                DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Cars") },
+                        leadingIcon = { Icon(Icons.Filled.DirectionsCar, contentDescription = null) },
+                        onClick = { showOverflowMenu = false; onNavigateToManageCars() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Saved Locations") },
+                        leadingIcon = { Icon(Icons.Filled.Place, contentDescription = null) },
+                        onClick = { showOverflowMenu = false; onNavigateToSavedLocations() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Offline Maps") },
+                        leadingIcon = { Icon(Icons.Filled.CloudDownload, contentDescription = null) },
+                        onClick = { showOverflowMenu = false; showOfflineDialog = true }
+                    )
+                }
+            }
+            IconButton(
+                onClick = onNavigateToSettings,
+                modifier = Modifier.align(Alignment.TopStart).padding(24.dp)
+            ) {
+                Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = floatingIconTint)
+            }
+
+            // Bluetooth connection status + driving-mode chip, and (when more than one linked
+            // car is connected at once) the "did you switch?" confirmation banner. Stacked in
+            // a Column above the parked-cars banner below, rather than both anchored
+            // independently to TopCenter, so the two never overlap regardless of which are
+            // visible at a given moment.
+            //
+            // zIndex is explicit here (rather than relying on this Column simply being
+            // declared after the Drive/Parked/recenter buttons in the code, which happened to
+            // draw it on top anyway) so it stays guaranteed to render above the FAB layout
+            // even if this block gets moved earlier in the file later.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(10f)
+                    .padding(top = TOP_BANNER_CLEARANCE, start = 12.dp, end = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Priority (parked-cars) banner goes FIRST and unconditionally occupies this
+                // slot whenever there's anything parked — everything else in this Column
+                // (toast, ambiguity banner) is appended AFTER it, so it never shifts position
+                // when those pop in or out. Previously this was last, which meant a toast or
+                // ambiguity banner appearing/disappearing pushed this banner up and down the
+                // screen — exactly what was reported as unwanted.
+                if (activeParkedCars.isNotEmpty()) {
+                    val mostUrgent = activeParkedCars.first() // already sorted soonest-first
+                    val now = System.currentTimeMillis()
+
+                    Surface(
+                        modifier = Modifier
+                            .clickable { parkedBannerExpanded = !parkedBannerExpanded },
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CarAvatar(mostUrgent.car, size = 20.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                val mostUrgentDeadline = mostUrgent.soonestDeadline()
+                                val countdownText = mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                Text(
+                                    text = "${mostUrgent.car.name} \u2014 $countdownText" +
+                                            (if (mostUrgentDeadline?.kind == DeadlineKind.RPP) " \u00b7 RPP limit" else ""),
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                if (activeParkedCars.size > 1) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "(+${activeParkedCars.size - 1} more)",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (parkedBannerExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    contentDescription = if (parkedBannerExpanded) "Collapse" else "Expand",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            if (parkedBannerExpanded) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                activeParkedCars.forEach { item ->
+                                    val itemDeadline = item.soonestDeadline()
+                                    val itemNextText = itemDeadline?.let {
+                                        val dt = java.time.Instant.ofEpochMilli(it.millis)
+                                            .atZone(java.time.ZoneId.systemDefault())
+                                        val base = formatSweepDateTime(dt)
+                                        if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
+                                    } ?: "No cleaning schedule found"
+                                    val itemCountdown = itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                item.parkedState?.let { parked ->
+                                                    scope.launch {
+                                                        val point = resolveCarLocation(context, parked)
+                                                        mapViewRef?.controller?.animateTo(GeoPoint(point.lat, point.lng))
+                                                    }
+                                                }
+                                                parkedBannerExpanded = false
+                                            }
+                                            .padding(vertical = 6.dp)
+                                    ) {
+                                        CarAvatar(item.car, size = 16.dp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
+                                            Text(itemNextText, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        Text(
+                                            itemCountdown,
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // Sync-status pill comes next, right below the priority banner — a dedicated,
+                // obvious call-to-action right on the map, separate from the small global
+                // status bar (MainActivity), specifically for a first-time user who hasn't
+                // necessarily noticed or understood that bar yet. Living in this Column
+                // (rather than its own independently-aligned Surface) means it stacks below
+                // the priority banner instead of overlapping it, and never shifts the
+                // priority banner's own position when it appears/disappears.
+                if (!isFullySynced) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text(
+                                when {
+                                    // currentAttemptFetchedCount (not totalSegmentCount) while a
+                                    // sync is actively in flight — a re-sync of an already-
+                                    // populated table can leave totalSegmentCount looking frozen
+                                    // for a while (insertAll is a REPLACE, so re-walking rows that
+                                    // already exist doesn't move the DB's total), so this shows
+                                    // the honest "what's actually happening right now" number,
+                                    // including visibly resetting to near-zero on a fresh attempt
+                                    // rather than silently displaying a stale total.
+                                    currentAttemptFetchedCount != null ->
+                                        "${"%,d".format(currentAttemptFetchedCount)} segments fetched this sync\u2026"
+                                    (totalSegmentCount ?: 0) > 0 ->
+                                        "${"%,d".format(totalSegmentCount)} segments loaded so far"
+                                    isSyncRunning -> "Syncing street data\u2026"
+                                    else -> "Street data not loaded yet"
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row {
+                                TextButton(
+                                    onClick = { StreetDataSyncCenter.triggerManualRefresh() },
+                                    enabled = !isSyncBusy
+                                ) {
+                                    Text(if (isSyncBusy) "\u2026" else "Sync Now")
+                                }
+                                TextButton(onClick = { StreetDataSyncCenter.reopenDialog() }) {
+                                    Text("Details")
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                } else if (showSyncSuccess) {
+                    // Replaces the pill above the instant isFullySynced flips true, rather
+                    // than the whole thing just vanishing with no acknowledgment — stays
+                    // until explicitly tapped away, since a completion that auto-dismissed
+                    // itself risked never being seen at all if it happened while the person
+                    // was looking elsewhere on the map.
+                    Surface(
+                        modifier = Modifier.clickable { showSyncSuccess = false },
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                "\u2705 Data successfully loaded",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "\u2715",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // Ambiguity banner comes next — it persists until the user resolves it, so it
+                // gets a stable slot too, same reasoning as the priority banner above. The
+                // toast goes last since it's the most transient of the three (auto-clears
+                // after 3s) — putting it last means its appearing/disappearing never shifts
+                // anything above it, including this banner.
+                val ambiguous = carLinkState as? CarLinkState.Ambiguous
+                if (ambiguous != null && BluetoothConnectionCenter.shouldShowAmbiguityBanner(ambiguous)) {
+                    val suggested = allCarsById[ambiguous.suggestedCarId]
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text(
+                                "Multiple cars connected: ${ambiguous.connectedCarIds.mapNotNull { allCarsById[it]?.name }.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "Did you switch cars?",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row {
+                                TextButton(onClick = {
+                                    BluetoothConnectionCenter.confirmActive(ambiguous.suggestedCarId)
+                                }) {
+                                    Text("Yes, ${suggested?.name ?: "switch"}")
+                                }
+                                TextButton(onClick = { BluetoothConnectionCenter.dismissAmbiguity() }) {
+                                    Text("No")
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                toastMessage?.let { msg ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.inverseSurface,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text(
+                            msg,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            } // closes the BT-chip/ambiguity/parked-banner Column opened above
+        } else {
+            Text("Location permission is needed to show the map.", modifier = Modifier.align(Alignment.Center))
+        }
+
+        // Everything below was previously placed AFTER this Box's closing brace, which meant
+        // `Modifier.align(...)` inside the DroppingPin banner had no BoxScope receiver to
+        // resolve against — that was the "unresolved reference 'align'" error. Moving the
+        // Box's closing brace down here (to the end of the composable) fixes it, and is
+        // harmless for the dialogs/bottom sheet since those render into their own window
+        // regardless of their parent's scope.
+        selectedSegment?.let { segment ->
+            SegmentDetailSheet(
+                segment = segment,
+                activeCar = activeCar,
+                onDismiss = {
+                    selectedSegment = null
+                    tapHighlightJob?.cancel()
+                    mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+                },
+                onOverrideChanged = {
+                    // Force an immediate redraw so the corrected color/schedule shows right
+                    // away, rather than waiting for the next pan-triggered reload.
+                    mapViewRef?.let { mv ->
+                        scope.launch {
+                            reloadSegmentsAndMarkers(
+                                mv, context, mv.mapCenter as GeoPoint,
+                                radiusDegrees = segmentRadiusDegrees,
+                                isPinDropActive = { pinDropCallback != null },
+                                thresholds = sweepThresholds,
+                                statusColors = statusColors,
+                                showCountdownLabels = showImminentCountdown,
+                                showRppZoneLabels = showRppZoneLabels,
+                                onSegmentClick = ::handleSegmentTap,
+                                locationOverlay = locationOverlayRef
+                            )
+                        }
+                    }
+                }
+            )
+        }
+
+        if (showOfflineDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (offlineTileDownloaded == null) showOfflineDialog = false
+                    // else: a download is in progress — ignore outside taps rather than
+                    // abandoning it silently; the Close button is the explicit way out.
+                },
+                title = { Text("Download offline tiles") },
+                text = {
+                    Column {
+                        Text(
+                            "Downloads map tiles for the area currently on screen, across a " +
+                                    "few zoom levels, so this area loads without a network " +
+                                    "connection later."
+                        )
+                        offlineTileDownloaded?.let { downloaded ->
+                            Spacer(Modifier.height(12.dp))
+                            LinearProgressIndicator(
+                                progress = { if (offlineTileTotal > 0) downloaded.toFloat() / offlineTileTotal else 0f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text("$downloaded / $offlineTileTotal tiles")
+                        }
+                        offlineStatusMessage?.let {
+                            Spacer(Modifier.height(8.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = offlineTileDownloaded == null,
+                        onClick = {
+                            mapViewRef?.let { mv ->
+                                offlineStatusMessage = null
+                                downloadOfflineTiles(
+                                    context = context,
+                                    mapView = mv,
+                                    onEstimate = { count ->
+                                        offlineTileTotal = count
+                                        offlineTileDownloaded = 0
+                                    },
+                                    onProgress = { downloaded, total ->
+                                        offlineTileDownloaded = downloaded
+                                        offlineTileTotal = total
+                                    },
+                                    onComplete = {
+                                        offlineStatusMessage = "Download complete."
+                                        offlineTileDownloaded = null
+                                    },
+                                    onError = { errors ->
+                                        offlineStatusMessage = "Finished with $errors error(s)."
+                                        offlineTileDownloaded = null
+                                    }
+                                )
+                            }
+                        }
+                    ) { Text("Download") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showOfflineDialog = false
+                        offlineTileDownloaded = null
+                        offlineStatusMessage = null
+                    }) { Text("Close") }
+                }
+            )
+        }
+
+        pendingSaveLocationName?.let { name ->
+            MapInstructionBanner(text = "Tap the map to save \"$name\"")
+            BottomCancelPill(onCancel = {
+                pinDropCallback = null
+                onPendingSaveLocationConsumed()
+            })
+        }
+        when (val state = parkingFlowState) {
+            is ParkingFlowState.ChoosingCar -> {
+                var cars by remember { mutableStateOf<List<Car>>(emptyList()) }
+                LaunchedEffect(state) {
+                    cars = AppDatabase.getInstance(context).carDao().getAll()
+                }
+                CarSelectionDialog(
+                    cars = cars,
+                    onPick = { car ->
+                        scope.launch { parkingFlowState = proceedToMatching(context, car.id, state.point) }
+                    },
+                    onAddNew = { name ->
+                        scope.launch {
+                            val newId = AppDatabase.getInstance(context).carDao().insert(Car(name = name))
+                            parkingFlowState = proceedToMatching(context, newId, state.point)
+                        }
+                    },
+                    onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+                )
+            }
+            is ParkingFlowState.Confirming -> if (parkingConfirmationStyle == "SIMPLE") {
+                QuickParkConfirmDialog(
+                    segment = state.match.segment,
+                    rejectLabel = "No, pick manually",
+                    onConfirm = { dropPin ->
+                        scope.launch {
+                            if (dropPin) {
+                                saveParkedState(context, state.carId, state.match.segment, state.point, state.point.lat, state.point.lng)
+                            } else {
+                                saveParkedState(context, state.carId, state.match.segment, state.point)
+                            }
+                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                            refreshActiveParkedCars()
+                            parkingFlowState = ParkingFlowState.Hidden
+                        }
+                    },
+                    onReject = {
+                        scope.launch {
+                            val matches = findNearbySegmentMatches(context, state.point)
+                            parkingFlowState = ParkingFlowState.PickingManually(state.carId, matches, state.point)
+                        }
+                    }
+                )
+            } else {
+                ParkingConfirmationDialog(
+                    match = state.match,
+                    onConfirm = {
+                        parkingFlowState = ParkingFlowState.AskingForPin(state.carId, state.match.segment, state.point)
+                    },
+                    onReject = {
+                        scope.launch {
+                            val matches = findNearbySegmentMatches(context, state.point)
+                            parkingFlowState = ParkingFlowState.PickingManually(state.carId, matches, state.point)
+                        }
+                    }
+                )
+            }
+            is ParkingFlowState.ConfirmingSide -> if (parkingConfirmationStyle == "SIMPLE") {
+                QuickParkConfirmDialog(
+                    segment = state.segment,
+                    rejectLabel = "No, tap again",
+                    onConfirm = { dropPin ->
+                        tapHighlightJob?.cancel()
+                        mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+                        scope.launch {
+                            if (dropPin) {
+                                saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
+                            } else {
+                                saveParkedState(context, state.carId, state.segment, state.point)
+                            }
+                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                            refreshActiveParkedCars()
+                            parkingFlowState = ParkingFlowState.Hidden
+                        }
+                    },
+                    onReject = {
+                        tapHighlightJob?.cancel()
+                        mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+                        parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
+                    }
+                )
+            } else {
+                ConfirmSideDialog(
+                    segment = state.segment,
+                    onConfirm = {
+                        tapHighlightJob?.cancel()
+                        mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+                        parkingFlowState = ParkingFlowState.AskingForPin(state.carId, state.segment, state.point)
+                    },
+                    onReject = {
+                        // Wrong side — clear the halo and drop back into "tap a street" rather than
+                        // all the way out of the flow, so a mis-tap costs one tap to correct, not a
+                        // full restart.
+                        tapHighlightJob?.cancel()
+                        mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+                        parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
+                    }
+                )
+            }
+            is ParkingFlowState.AskingForPin -> AlertDialog(
+                onDismissRequest = { /* require an explicit choice */ },
+                title = { Text("Add an exact pin?") },
+                text = {
+                    Column {
+                        Text("${state.segment.corridor} will be highlighted either way.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = {
+                            scope.launch {
+                                saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
+                        }) { Text("Yes, pin my current location") }
+                        TextButton(onClick = {
+                            parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
+                        }) { Text("Drop pin manually on map") }
+                        TextButton(onClick = {
+                            scope.launch {
+                                saveParkedState(context, state.carId, state.segment, state.point)
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
+                        }) { Text("No, just highlight street") }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {}
+            )
+            is ParkingFlowState.DroppingPin -> {
+                LaunchedEffect(state) {
+                    pinDropCallback = { tappedPoint ->
+                        scope.launch {
+                            saveParkedState(
+                                context, state.carId, state.segment, state.originalPoint,
+                                tappedPoint.latitude, tappedPoint.longitude
+                            )
+                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                            refreshActiveParkedCars()
+                            pinDropCallback = null
+                            parkingFlowState = ParkingFlowState.Hidden
+                        }
+                    }
+                }
+                MapInstructionBanner(text = "Tap the map to drop your pin")
+            }
+            is ParkingFlowState.PickingManually -> ManualSegmentPicker(
+                candidates = state.candidates,
+                onPick = { segment ->
+                    // Routes through AskingForPin like every other selection path, so picking
+                    // manually still offers the option to drop an exact pin instead of just
+                    // highlighting the street.
+                    parkingFlowState = ParkingFlowState.AskingForPin(state.carId, segment, state.point)
+                },
+                onPickFromMap = {
+                    parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
+                },
+                onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+            )
+            is ParkingFlowState.PickingViaMap -> {
+                MapInstructionBanner(text = "Tap a street on the map to select it")
+                BottomCancelPill(onCancel = { parkingFlowState = ParkingFlowState.Hidden })
+            }
+            ParkingFlowState.Hidden -> {}
+        }
+    }
+}
+
+/**
+ * A rounded, elevated instruction banner for "tap the map to do X" states — purely
+ * informational, no button of its own (see BottomCancelPill for that), so it stays exactly as
+ * compact as its text needs, never a big rectangle padded out by a touch target.
+ */
+@Composable
+private fun BoxScope.MapInstructionBanner(text: String) {
+    Surface(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = TOP_BANNER_CLEARANCE, start = 12.dp, end = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shadowElevation = 4.dp
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+        )
+    }
+}
+
+/**
+ * A small pill, bottom-anchored well clear of the map's own bottom controls (the "Parked"
+ * button sits at BottomCenter too, right at the navigation-bar edge — see its own comment),
+ * for cancelling whichever map-tap flow is active. Deliberately separate from
+ * MapInstructionBanner at the top of the screen: putting a cancel affordance inside/under that
+ * banner (an earlier version of this did) either got lost against the instruction text or
+ * ballooned the banner into a big rectangle to fit a 48dp touch target — a standalone pill
+ * avoids both.
+ */
+@Composable
+private fun BoxScope.BottomCancelPill(onCancel: () -> Unit) {
+    Surface(
+        onClick = onCancel,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .padding(bottom = 88.dp), // clears the "Parked" button (bottom = 24.dp) stacked below it
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        shadowElevation = 3.dp
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Cancel", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}

@@ -1,0 +1,25 @@
+# Gradle / build output (note: no leading slash, so app/build is covered too)
+.gradle/
+build/
+.kotlin/
+captures/
+.cxx/
+.externalNativeBuild/
+
+# Machine-specific
+local.properties
+*.iml
+.DS_Store
+
+# Android Studio (solo project: simplest to ignore all of it)
+.idea/
+
+# Secrets: these ship inside the APK, keep them out of history
+app/src/main/assets/stadia_api_key.txt
+app/src/main/assets/datasf_app_token.txt
+
+# Release signing, if you ever add it
+*.jks
+*.keystore
+*.apk
+*.aab
