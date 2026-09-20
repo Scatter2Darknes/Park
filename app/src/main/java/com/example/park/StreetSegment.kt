@@ -23,7 +23,10 @@ data class StreetSegment(
     val holidays: Boolean,
     val points: List<LatLng>,
     val centroidLat: Double,
-    val centroidLng: Double
+    val centroidLng: Double,
+    // Id of the last network sync that saw this row (see StaleRowPruning.kt). Null = never stamped
+    // (a row from before this column existed). Lets a sync delete rows that have vanished upstream.
+    val lastSeenSyncId: Long? = null
 )
 
 class LatLngListConverter {
@@ -58,6 +61,11 @@ interface StreetSegmentDao {
     @Query("SELECT * FROM street_segment")
     suspend fun getAll(): List<StreetSegment>
 
+    // Deletes every row the network sync with id [syncId] did not see (never stamped, or last seen by
+    // an earlier sync). Only ever called after a FULLY successful sync — see StaleRowPruning.kt.
+    @Query("DELETE FROM street_segment WHERE lastSeenSyncId IS NULL OR lastSeenSyncId < :syncId")
+    suspend fun deleteNotSeenSince(syncId: Long): Int
+
     @Query("SELECT COUNT(*) FROM street_segment")
     suspend fun count(): Int
 
@@ -78,7 +86,7 @@ interface StreetSegmentDao {
             COALESCE(o.week3, s.week3) AS week3,
             COALESCE(o.week4, s.week4) AS week4,
             COALESCE(o.week5, s.week5) AS week5,
-            s.holidays, s.points, s.centroidLat, s.centroidLng
+            s.holidays, s.points, s.centroidLat, s.centroidLng, s.lastSeenSyncId
         FROM street_segment s
         LEFT JOIN schedule_override o ON s.blockSweepId = o.blockSweepId
         WHERE s.centroidLat BETWEEN :minLat AND :maxLat
@@ -97,7 +105,7 @@ interface StreetSegmentDao {
             COALESCE(o.week3, s.week3) AS week3,
             COALESCE(o.week4, s.week4) AS week4,
             COALESCE(o.week5, s.week5) AS week5,
-            s.holidays, s.points, s.centroidLat, s.centroidLng
+            s.holidays, s.points, s.centroidLat, s.centroidLng, s.lastSeenSyncId
         FROM street_segment s
         LEFT JOIN schedule_override o ON s.blockSweepId = o.blockSweepId
         WHERE s.blockSweepId = :id

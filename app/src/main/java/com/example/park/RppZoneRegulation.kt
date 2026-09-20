@@ -20,7 +20,10 @@ data class RppZoneRegulation(
     val hrLimit: Float,      // hours a non-permit-holding vehicle may park before this counts against it
     val points: List<LatLng>,
     val centroidLat: Double,
-    val centroidLng: Double
+    val centroidLng: Double,
+    // Id of the last network sync that saw this row (see StaleRowPruning.kt). Null = never stamped
+    // (a row from before this column existed). Lets a sync delete rows that have vanished upstream.
+    val lastSeenSyncId: Long? = null
 )
 
 /** [RppZoneRegulation.zoneLetters], parsed and normalized. */
@@ -41,6 +44,10 @@ interface RppZoneRegulationDao {
 
     @Query("SELECT * FROM rpp_zone_regulation WHERE objectId = :id LIMIT 1")
     suspend fun getById(id: String): RppZoneRegulation?
+
+    // Same as StreetSegmentDao.deleteNotSeenSince, for RPP blockfaces.
+    @Query("DELETE FROM rpp_zone_regulation WHERE lastSeenSyncId IS NULL OR lastSeenSyncId < :syncId")
+    suspend fun deleteNotSeenSince(syncId: Long): Int
 
     @Query("SELECT COUNT(*) FROM rpp_zone_regulation")
     suspend fun count(): Int

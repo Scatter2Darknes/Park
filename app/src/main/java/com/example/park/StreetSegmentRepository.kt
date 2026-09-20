@@ -27,6 +27,11 @@ class StreetSegmentRepository(private val context: Context) {
             // separate counter, re-syncing an already-partially-populated table looked frozen at
             // the old total for however long it took to re-walk back past where it left off,
             // even though pages were visibly landing in Logcat the whole time.
+            // Stamps every row this sync upserts, so a later cleanup can tell which rows the feed
+            // no longer returns (see StaleRowPruning.kt). existingCount is read BEFORE the sync
+            // starts writing, for the "did we get suspiciously few rows back" guard.
+            val syncId = System.currentTimeMillis()
+            val existingCount = db.streetSegmentDao().count()
             StreetDataSyncCenter.onSyncAttemptStarted()
             var fetchedThisAttempt = 0
             try {
@@ -38,7 +43,7 @@ class StreetSegmentRepository(private val context: Context) {
                 // zero with nothing on the map to show for it. Now whatever synced before a
                 // failure stays saved.
                 val count = fetchAllSegments(context) { page ->
-                    db.streetSegmentDao().insertAll(page)
+                    db.streetSegmentDao().insertAll(page.map { it.copy(lastSeenSyncId = syncId) })
                     fetchedThisAttempt += page.size
                     StreetDataSyncCenter.onSyncAttemptProgress(fetchedThisAttempt)
                 }
@@ -48,6 +53,13 @@ class StreetSegmentRepository(private val context: Context) {
                 // failure), consistent with "last synced" meaning a complete sync, not a
                 // partial one.
                 SettingsRepository(context).setLastRefreshMillis(System.currentTimeMillis())
+                // Same condition as the timestamp above — only reached after a FULLY successful sync.
+                // A failure here must not turn a good sync into a failed one.
+                try {
+                    pruneStaleStreetSegments(context, syncId, existingCount, count)
+                } catch (e: Exception) {
+                    android.util.Log.w("DataSF", "Stale-segment cleanup failed", e)
+                }
                 refreshParkedSchedulesAfterSync(context)
                 return count
             } finally {

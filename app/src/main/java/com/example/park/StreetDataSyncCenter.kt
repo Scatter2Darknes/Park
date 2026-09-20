@@ -296,7 +296,12 @@ object StreetDataSyncCenter {
                         _statusMessage.value = "That file didn't contain any recognizable street segments \u2014 " +
                                 "is it a DataSF street sweeping export (yhqp-riqs), as JSON or CSV?"
                     } else {
-                        AppDatabase.getInstance(context).streetSegmentDao().insertAll(parsed)
+                        // Stamped like a network sync (so a later network sync's cleanup treats these
+                        // rows as seen-at-this-time) but NEVER pruned: a file isn't authoritative about
+                        // what else exists, so an import must not delete anything (see StaleRowPruning.kt).
+                        val importId = System.currentTimeMillis()
+                        AppDatabase.getInstance(context).streetSegmentDao()
+                            .insertAll(parsed.map { it.copy(lastSeenSyncId = importId) })
                         _totalSegmentCount.value = AppDatabase.getInstance(context).streetSegmentDao().count()
                         _isFullySynced.value = true // data's here now; stop waiting on the network sync
                         // Also persisted, not just set in memory \u2014 without this, a

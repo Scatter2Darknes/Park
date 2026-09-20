@@ -16,14 +16,25 @@ class RppZoneRepository(private val context: Context) {
         }
         try {
             val db = AppDatabase.getInstance(context)
+            // Stamp/prune bookkeeping — see StaleRowPruning.kt.
+            val syncId = System.currentTimeMillis()
+            val existingCount = db.rppZoneRegulationDao().count()
             StreetDataSyncCenter.onRppSyncAttemptStarted()
             var fetchedThisAttempt = 0
             try {
-                return fetchAllRppRegulations { page ->
-                    db.rppZoneRegulationDao().insertAll(page)
+                val total = fetchAllRppRegulations { page ->
+                    db.rppZoneRegulationDao().insertAll(page.map { it.copy(lastSeenSyncId = syncId) })
                     fetchedThisAttempt += page.size
                     StreetDataSyncCenter.onRppSyncAttemptProgress(fetchedThisAttempt)
                 }
+                // fetchAllRppRegulations throws on an unrecoverable page failure, so reaching here
+                // means the sync fully succeeded — the only time it's safe to delete unseen rows.
+                try {
+                    pruneStaleRppRegulations(context, syncId, existingCount, total)
+                } catch (e: Exception) {
+                    android.util.Log.w("RppSync", "Stale-RPP cleanup failed", e)
+                }
+                return total
             } finally {
                 StreetDataSyncCenter.onRppSyncAttemptEnded()
             }

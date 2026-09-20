@@ -126,9 +126,22 @@ val MIGRATION_11_12 = Migration(11, 12) { db ->
     db.execSQL("ALTER TABLE parked_state ADD COLUMN rppUrgentDeliveredForMillis INTEGER")
 }
 
+/**
+ * v12 -> v13: adds lastSeenSyncId to street_segment and rpp_zone_regulation, the stamp a network
+ * sync leaves on every row it sees so rows that later vanish upstream can be deleted (see
+ * StaleRowPruning.kt). Nullable INTEGER with no default — deliberately not NOT NULL DEFAULT 0,
+ * which Room's schema validation would insist matches an @ColumnInfo(defaultValue) exactly. Existing
+ * rows get NULL, meaning "not seen by any stamped sync yet": the first fully successful sync after
+ * the upgrade re-stamps everything the feed still returns and deletes the rest.
+ */
+val MIGRATION_12_13 = Migration(12, 13) { db ->
+    db.execSQL("ALTER TABLE street_segment ADD COLUMN lastSeenSyncId INTEGER")
+    db.execSQL("ALTER TABLE rpp_zone_regulation ADD COLUMN lastSeenSyncId INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12
+    MIGRATION_11_12, MIGRATION_12_13
 )
 
 /*

@@ -63,6 +63,57 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate12To13_keepsSegmentAndRppRows_andAddsNullLastSeenSyncId() {
+        helper.createDatabase(TEST_DB, 12).apply {
+            execSQL(
+                """
+                INSERT INTO street_segment
+                    (blockSweepId, cnn, corridor, limits, cnnRightLeft, blockSide, fullName,
+                     fromHour, toHour, week1, week2, week3, week4, week5, holidays,
+                     points, centroidLat, centroidLng)
+                VALUES
+                    ('seg-1', '123', 'Main St', 'A to B', 'R', 'North', 'Mon',
+                     6, 8, 1, 1, 1, 1, 1, 0,
+                     '[[37.1,-122.1],[37.2,-122.2]]', 37.15, -122.15)
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO rpp_zone_regulation
+                    (objectId, zoneLetters, days, hrsBegin, hrsEnd, hrLimit, points, centroidLat, centroidLng)
+                VALUES
+                    ('rpp-7', 'A', 'M-F', 800, 1800, 2.0, '[[37.1,-122.1]]', 37.1, -122.1)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 13, true, MIGRATION_12_13)
+
+        db.query("SELECT corridor, fromHour, toHour, lastSeenSyncId FROM street_segment").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Main St", c.getString(0))
+            assertEquals(6, c.getInt(1))
+            assertEquals(8, c.getInt(2))
+            assertTrue("street_segment.lastSeenSyncId should be NULL after migration", c.isNull(3))
+            assertEquals(1, c.count)
+        }
+        db.query("SELECT zoneLetters, hrLimit, lastSeenSyncId FROM rpp_zone_regulation").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("A", c.getString(0))
+            assertEquals(2.0, c.getDouble(1), 0.0)
+            assertTrue("rpp_zone_regulation.lastSeenSyncId should be NULL after migration", c.isNull(2))
+            assertEquals(1, c.count)
+        }
+    }
+
+    @Test
+    fun migrateFrom11ThroughToCurrent_runsTheWholeChain() {
+        helper.createDatabase(TEST_DB, 11).close()
+        helper.runMigrationsAndValidate(TEST_DB, 13, true, MIGRATION_11_12, MIGRATION_12_13).close()
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }
