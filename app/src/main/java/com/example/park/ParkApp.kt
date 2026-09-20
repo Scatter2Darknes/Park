@@ -215,6 +215,23 @@ class ParkApp : Application(), DefaultLifecycleObserver {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
+    // Re-arms reminder alarms every time the app comes to the foreground — the backstop for
+    // anything that wiped them without a boot (e.g. Force Stop) and for a missed boot broadcast.
+    // Deliberately NOT in onCreate(): that runs on every cold process start, including the one
+    // an alarm itself triggers, where re-arming would run in the middle of delivering a reminder.
+    // ProcessLifecycleOwner's onStart fires once when the first Activity becomes visible, not
+    // per-Activity, so this isn't repeated on every screen change. Re-arming is idempotent and
+    // never cancels a notification, so running it on every foreground is safe.
+    override fun onStart(owner: LifecycleOwner) {
+        appScope.launch {
+            try {
+                rearmAllActiveReminders(this@ParkApp)
+            } catch (e: Exception) {
+                android.util.Log.w("ParkApp", "Foreground re-arm of reminders failed", e)
+            }
+        }
+    }
+
     override fun onStop(owner: LifecycleOwner) {
         android.util.Log.d("ParkWidget", "ParkApp: onStop fired (app backgrounded)")
         appScope.launch {
