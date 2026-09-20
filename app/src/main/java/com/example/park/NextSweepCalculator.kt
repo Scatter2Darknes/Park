@@ -44,6 +44,20 @@ object NextSweepCalculator {
         return now.toLocalDate().atTime(segment.toHour, 0)
     }
 
+    /**
+     * When the sweep that is happening RIGHT NOW ends, or null if none is in progress.
+     *
+     * Stricter than [activeWindowEndDateTime], which only checks the day/week/holiday and returns
+     * today's end time even at 5am, before the window opens — fine for its one caller (the map
+     * countdown, which has already checked the sweep status), but wrong for "sweeping is in
+     * progress, move now", which must not fire before [StreetSegment.fromHour] or at/after the end.
+     */
+    fun sweepInProgressEndDateTime(segment: StreetSegment, now: LocalDateTime): LocalDateTime? {
+        val end = activeWindowEndDateTime(segment, now) ?: return null
+        val start = now.toLocalDate().atTime(segment.fromHour, 0)
+        return if (!now.isBefore(start) && now.isBefore(end)) end else null
+    }
+
     fun dayOfWeekFromName(name: String): DayOfWeek? {
         val firstWord = name.trim().split(Regex("\\s+")).firstOrNull()?.lowercase() ?: return null
         return DayOfWeek.entries.firstOrNull { day ->

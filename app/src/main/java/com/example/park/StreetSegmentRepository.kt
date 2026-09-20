@@ -48,6 +48,7 @@ class StreetSegmentRepository(private val context: Context) {
                 // failure), consistent with "last synced" meaning a complete sync, not a
                 // partial one.
                 SettingsRepository(context).setLastRefreshMillis(System.currentTimeMillis())
+                refreshParkedSchedulesAfterSync(context)
                 return count
             } finally {
                 StreetDataSyncCenter.onSyncAttemptEnded()

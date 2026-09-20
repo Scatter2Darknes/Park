@@ -39,6 +39,7 @@ data class ParkedState(
         ReminderKind.URGENT -> urgentDeliveredForMillis
         ReminderKind.RPP_NORMAL -> rppNormalDeliveredForMillis
         ReminderKind.RPP_URGENT -> rppUrgentDeliveredForMillis
+        ReminderKind.SWEEP_ACTIVE -> null // a one-off notice, not a scheduled tier — nothing to de-duplicate
     }
 }
 
@@ -55,6 +56,14 @@ interface ParkedStateDao {
 
     @Query("UPDATE parked_state SET notificationScheduled = :scheduled WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun setNotificationScheduled(carId: Long, parkedAtMillis: Long, scheduled: Boolean)
+
+    @Query("SELECT * FROM parked_state WHERE segmentBlockSweepId = :blockSweepId")
+    suspend fun getForSegment(blockSweepId: String): List<ParkedState>
+
+    // Guarded by parkedAtMillis like the delivery markers: a recompute racing a re-park must not
+    // write the old row's deadline into the new one.
+    @Query("UPDATE parked_state SET nextSweepAtMillis = :nextSweepAtMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun updateNextSweep(carId: Long, parkedAtMillis: Long, nextSweepAtMillis: Long?)
 
     @Query("DELETE FROM parked_state WHERE carId = :carId")
     suspend fun clearForCar(carId: Long)

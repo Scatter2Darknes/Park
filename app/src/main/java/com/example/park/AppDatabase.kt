@@ -118,7 +118,10 @@ suspend fun saveParkedState(
             reminderOffsetMillis = reminderOffsetMillis,
             urgentOffsetMillis = urgentOffsetMillis
         )
-    } else false
+    } else {
+        cancelSweepReminder(context, carId) // re-parked somewhere with no upcoming sweep: drop the previous spot's alarms
+        false
+    }
 
     // Independent of the sweep reminder above — a block can be both swept AND RPP-zoned, or
     // only one, or neither. car is looked up fresh (not passed a default) since
@@ -140,11 +143,38 @@ suspend fun saveParkedState(
             moveByAtMillis = rppDeadline.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
             parkedAtMillis = parkedAtMillis,
             reminderOffsetMillis = reminderOffsetMillis,
-            urgentOffsetMillis = urgentOffsetMillis
+            urgentOffsetMillis = urgentOffsetMillis,
+            rollForwardAtMillis = rppRegulation?.let { rppWindowEndMillis(it, rppDeadline.moveByDateTime) }
+                ?: rppDeadline.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         )
     } else {
         cancelRppReminder(context, carId) // no RPP match here, car holds a permit, or re-parking away from a previous RPP spot
         false
+    }
+
+    // Parked while a sweep is ALREADY under way: the scheduling above only knows about the NEXT
+    // occurrence (next week's), so without this the user would get no warning at all that they've
+    // just parked in the middle of one. Posted on top of, not instead of, the normal scheduling.
+    // Any notice left from a previous spot is cleared first (posting again would replace it anyway,
+    // but if this spot isn't being swept the old one has to go). This function is also the path the
+    // Bluetooth auto-park takes, so the notice covers that too.
+    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
+    val sweepEnd = NextSweepCalculator.sweepInProgressEndDateTime(segment, parkedAt)
+    if (sweepEnd != null) {
+        val endMillis = sweepEnd.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val carName = car?.name ?: "Your car"
+        val (title, text) = buildReminderContent(carName, segment.corridor, endMillis, ReminderKind.SWEEP_ACTIVE)
+        NotificationHelper.showReminder(
+            context = context,
+            notificationId = reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE),
+            kind = ReminderKind.SWEEP_ACTIVE,
+            title = title,
+            text = text,
+            carId = carId,
+            carName = carName,
+            corridor = segment.corridor,
+            nextSweepAtMillis = endMillis
+        )
     }
 
     // Records what actually happened (an alarm was set — exact or the inexact fallback — or a

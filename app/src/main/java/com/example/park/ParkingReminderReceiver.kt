@@ -38,6 +38,9 @@ fun buildReminderContent(
                 ("The non-permit time limit in $corridor is up" + (timeText?.let { " $it" } ?: " soon"))
         ReminderKind.RPP_NORMAL -> "Move $carName soon" to
                 ("Non-permit time limit coming up in $corridor" + (timeText?.let { " \u2014 $it" } ?: ""))
+        // Here nextSweepAtMillis is when the sweeping window ENDS, not when it starts.
+        ReminderKind.SWEEP_ACTIVE -> "Sweeping in progress \u2014 move $carName now" to
+                ("Street cleaning on $corridor is under way" + (timeText?.let { " until $it" } ?: ""))
     }
 }
 

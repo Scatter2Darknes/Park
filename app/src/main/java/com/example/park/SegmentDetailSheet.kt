@@ -114,6 +114,9 @@ fun SegmentDetailSheet(
             onSave = { override ->
                 scope.launch {
                     AppDatabase.getInstance(context).scheduleOverrideDao().upsert(override)
+                    // Any car parked on this block has a deadline and alarms computed from the OLD
+                    // schedule — recompute them now, before onOverrideChanged() reloads the UI.
+                    recomputeSchedulesForSegment(context, override.blockSweepId)
                     showOverrideDialog = false
                     onOverrideChanged()
                     onDismiss() // segment data is now stale relative to the DB; close rather than show outdated info
@@ -122,6 +125,7 @@ fun SegmentDetailSheet(
             onRemove = {
                 scope.launch {
                     AppDatabase.getInstance(context).scheduleOverrideDao().deleteById(segment.blockSweepId)
+                    recomputeSchedulesForSegment(context, segment.blockSweepId)
                     showOverrideDialog = false
                     onOverrideChanged()
                     onDismiss()

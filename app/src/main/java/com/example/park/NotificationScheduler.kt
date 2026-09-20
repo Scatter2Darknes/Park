@@ -19,12 +19,19 @@ import java.time.ZoneId
 private const val URGENT_ID_OFFSET = 1_000_000
 private const val RPP_NORMAL_ID_OFFSET = 2_000_000
 private const val RPP_URGENT_ID_OFFSET = 3_000_000
+// Roll-forward alarms (see scheduleRollForward) and the one-off "sweeping in progress" notice.
+// NOT reused from anywhere else: BluetoothDisconnectReceiver/BluetoothConnectReceiver already use
+// 2_000_000 and 3_000_000 for their own notification ids, so these start above both.
+private const val ROLL_SWEEP_ID_OFFSET = 4_000_000
+private const val ROLL_RPP_ID_OFFSET = 5_000_000
+private const val SWEEP_ACTIVE_ID_OFFSET = 6_000_000
 
 fun reminderRequestCode(carId: Long, kind: ReminderKind): Int = carId.toInt() + when (kind) {
     ReminderKind.NORMAL -> 0
     ReminderKind.URGENT -> URGENT_ID_OFFSET
     ReminderKind.RPP_NORMAL -> RPP_NORMAL_ID_OFFSET
     ReminderKind.RPP_URGENT -> RPP_URGENT_ID_OFFSET
+    ReminderKind.SWEEP_ACTIVE -> SWEEP_ACTIVE_ID_OFFSET
 }
 
 fun reminderNotificationId(carId: Long, kind: ReminderKind): Int = reminderRequestCode(carId, kind)
@@ -142,6 +149,7 @@ suspend fun recordReminderDelivery(
         ReminderKind.URGENT -> dao.markUrgentDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.RPP_NORMAL -> dao.markRppNormalDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.RPP_URGENT -> dao.markRppUrgentDelivered(carId, parkedAtMillis, deadlineMillis)
+        ReminderKind.SWEEP_ACTIVE -> Unit // one-off notice; has no delivery marker
     }
 }
 
@@ -226,10 +234,69 @@ private suspend fun scheduleOrFireImmediately(
     }
 }
 
+
+/**
+ * Roll-forward alarms: one tiny alarm per car and per reminder family (sweep, RPP), set for the
+ * moment the current deadline has passed — a sweep's start, or (for RPP) the close of that day's
+ * enforcement window. When it fires, [ScheduleRollForwardReceiver] runs [recomputeParkedSchedule],
+ * which moves the parked row on to its NEXT occurrence and schedules reminders for it — so a car
+ * that stays parked through a sweep gets next week's reminders without the app being opened.
+ *
+ * This is deliberately a separate alarm rather than "roll forward when the reminder is delivered":
+ * that would advance nextSweepAtMillis while the sweep is still ahead, and every on-screen
+ * countdown would jump to next week early. If a roll-forward alarm is missed (reboot, force-stop),
+ * the re-arm in [rearmAllActiveReminders] does the same recompute the next time it runs.
+ */
+enum class RollForwardKind { SWEEP, RPP }
+
+private fun rollForwardRequestCode(carId: Long, kind: RollForwardKind): Int = carId.toInt() + when (kind) {
+    RollForwardKind.SWEEP -> ROLL_SWEEP_ID_OFFSET
+    RollForwardKind.RPP -> ROLL_RPP_ID_OFFSET
+}
+
+private fun cancelRollForward(context: Context, carId: Long, kind: RollForwardKind) {
+    val alarmManager = context.getSystemService(AlarmManager::class.java)
+    val pendingIntent = PendingIntent.getBroadcast(
+        context, rollForwardRequestCode(carId, kind),
+        Intent(context, ScheduleRollForwardReceiver::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    alarmManager.cancel(pendingIntent)
+}
+
+/** Sets the roll-forward alarm for [atMillis], or cancels it if that moment has already passed
+ *  (which also stops a roll-forward from ever looping: it only re-arms for a FUTURE moment). */
+private fun scheduleRollForward(
+    context: Context,
+    carId: Long,
+    parkedAtMillis: Long,
+    kind: RollForwardKind,
+    atMillis: Long,
+    now: Long,
+    exactAlarmsAllowed: Boolean,
+    alarmManager: AlarmManager
+) {
+    if (atMillis <= now) {
+        cancelRollForward(context, carId, kind)
+        return
+    }
+    val intent = Intent(context, ScheduleRollForwardReceiver::class.java).apply {
+        putExtra("carId", carId)
+        putExtra("parkedAtMillis", parkedAtMillis)
+        putExtra("rollKind", kind.name)
+    }
+    val pendingIntent = PendingIntent.getBroadcast(
+        context, rollForwardRequestCode(carId, kind), intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    setAlarm(alarmManager, exactAlarmsAllowed, atMillis, pendingIntent, "$kind roll-forward")
+}
+
 /**
  * The shared body of scheduling both tiers of one reminder family (sweep or RPP) against one
  * deadline. [normalDeliveredForMillis]/[urgentDeliveredForMillis] are the delivery markers off
- * the parked row (null when scheduling for a brand-new row).
+ * the parked row (null when scheduling for a brand-new row). Also sets the family's roll-forward
+ * alarm for [rollForwardAtMillis].
  *
  * [clearStaleNotifications] is the one difference between the two scheduling paths:
  *  - true ("schedule fresh": a new park, or a Settings change): a notification still on screen
@@ -251,7 +318,9 @@ private suspend fun scheduleTiers(
     urgentOffsetMillis: Long?,
     normalDeliveredForMillis: Long?,
     urgentDeliveredForMillis: Long?,
-    clearStaleNotifications: Boolean
+    clearStaleNotifications: Boolean,
+    rollKind: RollForwardKind,
+    rollForwardAtMillis: Long
 ): Boolean {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val now = System.currentTimeMillis()
@@ -281,6 +350,8 @@ private suspend fun scheduleTiers(
         cancelAlarm(context, carId, urgentKind) // urgent tier disabled in Settings
         false
     }
+
+    scheduleRollForward(context, carId, parkedAtMillis, rollKind, rollForwardAtMillis, now, exactAlarmsAllowed, alarmManager)
     return normalHandled || urgentHandled
 }
 
@@ -291,7 +362,8 @@ private suspend fun scheduleTiers(
  *
  * Already-shown notifications from a previous parked state are cleared first so a stale
  * "move your car" doesn't linger after re-parking or re-scheduling. Pass the parked row's
- * delivery markers when rescheduling an existing row; leave them null for a brand-new one.
+ * delivery markers when rescheduling an existing row; leave them null for a brand-new one. Also
+ * sets the roll-forward alarm that advances the row past this sweep once it has happened.
  *
  * @return whether at least one tier is taken care of (an alarm set, exact or inexact fallback, or a
  *   reminder fired now) — what ParkedState.notificationScheduled records.
@@ -310,13 +382,15 @@ suspend fun scheduleParkingReminders(
 ) = scheduleTiers(
     context, carId, carName, corridor, nextSweepAtMillis, parkedAtMillis,
     ReminderKind.NORMAL, ReminderKind.URGENT, reminderOffsetMillis, urgentOffsetMillis,
-    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true
+    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true,
+    rollKind = RollForwardKind.SWEEP, rollForwardAtMillis = nextSweepAtMillis
 )
 
 /**
  * Same shape as scheduleParkingReminders, for the RPP non-permit move-by deadline instead of a
  * sweep start time. [zoneLabel] plays the role scheduleParkingReminders' "corridor" does (see
- * buildReminderContent's doc comment).
+ * buildReminderContent's doc comment). [rollForwardAtMillis] is when the RPP roll-forward alarm
+ * should fire — see [rppWindowEndMillis].
  */
 suspend fun scheduleRppReminders(
     context: Context,
@@ -328,19 +402,46 @@ suspend fun scheduleRppReminders(
     reminderOffsetMillis: Long,
     urgentOffsetMillis: Long?,
     normalDeliveredForMillis: Long? = null,
-    urgentDeliveredForMillis: Long? = null
+    urgentDeliveredForMillis: Long? = null,
+    rollForwardAtMillis: Long = moveByAtMillis
 ) = scheduleTiers(
     context, carId, carName, zoneLabel, moveByAtMillis, parkedAtMillis,
     ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, reminderOffsetMillis, urgentOffsetMillis,
-    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true
+    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true,
+    rollKind = RollForwardKind.RPP, rollForwardAtMillis = rollForwardAtMillis
 )
 
-/** Cancels both RPP alarm tiers and any currently-shown RPP notifications for a car. */
+/**
+ * When the enforcement window containing [moveBy] closes — where RPP's roll-forward alarm goes.
+ *
+ * Not at the deadline itself, unlike a sweep: recomputing right at the RPP deadline gives back the
+ * same deadline (nextRppDeadline keeps returning today's move-by time for as long as today's window
+ * is still open), so nothing would advance. Only once the window has closed does the next
+ * occurrence become tomorrow's.
+ */
+fun rppWindowEndMillis(regulation: RppZoneRegulation, moveBy: LocalDateTime): Long {
+    val windowEnd = moveBy.toLocalDate().atTime(militaryHourToLocalTime(regulation.hrsEnd))
+    return (if (windowEnd.isAfter(moveBy)) windowEnd else moveBy)
+        .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+}
+
+/** Cancels both RPP alarm tiers, the RPP roll-forward alarm, and any currently-shown RPP notifications for a car. */
 fun cancelRppReminder(context: Context, carId: Long) {
     cancelAlarm(context, carId, ReminderKind.RPP_NORMAL)
     cancelAlarm(context, carId, ReminderKind.RPP_URGENT)
+    cancelRollForward(context, carId, RollForwardKind.RPP)
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.RPP_NORMAL))
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.RPP_URGENT))
+}
+
+/** Cancels the sweep half only — both alarm tiers, the sweep roll-forward alarm and their notifications
+ *  — for a car whose new spot has no upcoming sweep. The RPP half is independent (see cancelRppReminder). */
+fun cancelSweepReminder(context: Context, carId: Long) {
+    cancelAlarm(context, carId, ReminderKind.NORMAL)
+    cancelAlarm(context, carId, ReminderKind.URGENT)
+    cancelRollForward(context, carId, RollForwardKind.SWEEP)
+    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.NORMAL))
+    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.URGENT))
 }
 
 /** Cancels every alarm tier — sweep AND RPP — and any currently-shown notifications for a car.
@@ -349,82 +450,183 @@ fun cancelRppReminder(context: Context, carId: Long) {
 fun cancelParkingReminder(context: Context, carId: Long) {
     cancelAlarm(context, carId, ReminderKind.NORMAL)
     cancelAlarm(context, carId, ReminderKind.URGENT)
+    cancelRollForward(context, carId, RollForwardKind.SWEEP)
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.NORMAL))
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.URGENT))
+    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
     cancelRppReminder(context, carId)
 }
 
+/** An RPP deadline plus the two epoch-millis values derived from it. */
+private class RppDeadlineInfo(val warning: RppWarning, val moveByMillis: Long, val rollForwardAtMillis: Long)
+
 /**
- * The RPP deadline for [parked] as of [now], or null when none applies (no regulation matched,
+ * The RPP deadline for [parked] as of now, or null when none applies (no regulation matched,
  * the car holds a permit, or the days didn't parse).
  *
  * Nothing stores this deadline — it's recomputed every time from the regulation, the car and
  * parked-at time. That's safe for delivery markers because the result is deterministic: for a
  * given parked row it stays the same value from the moment of parking until the deadline's own
- * window closes (see RppStatusTest's "recomputed later" tests), so the value recorded when a
- * reminder is delivered still matches the value recomputed at a later re-arm.
+ * window closes (see RppRearmDeterminismTest), so the value recorded when a reminder is
+ * delivered still matches the value recomputed at a later re-arm.
  */
-private suspend fun currentRppDeadlineMillis(
+private suspend fun currentRppDeadline(
     db: AppDatabase,
     parked: ParkedState,
     car: Car
-): Pair<RppWarning, Long>? {
+): RppDeadlineInfo? {
     val regulation = parked.rppRegulationId?.let { db.rppZoneRegulationDao().getById(it) } ?: return null
     val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
     val warning = nextRppDeadline(regulation, car, parkedSince, LocalDateTime.now()) ?: return null
-    return warning to warning.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    return RppDeadlineInfo(
+        warning,
+        warning.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+        rppWindowEndMillis(regulation, warning.moveByDateTime)
+    )
 }
 
-/** Serializes arming: the foreground trigger and the boot trigger (and Settings changes) can
- *  overlap, and two runs racing through "not delivered yet → post it" could post the same
- *  reminder twice before either recorded its marker. */
+/** Serializes arming: the foreground trigger and the boot trigger (and Settings changes, sync,
+ *  and roll-forward alarms) can overlap, and two runs racing through "not delivered yet → post
+ *  it" could post the same reminder twice before either recorded its marker. Kotlin's Mutex is
+ *  not reentrant, so only the public entry points take it; the private helpers below don't. */
 private val armMutex = Mutex()
 
-private suspend fun armAllParkedStates(context: Context, clearStaleNotifications: Boolean) = armMutex.withLock {
-    val db = AppDatabase.getInstance(context)
+private class ArmSettings(val reminderOffsetMillis: Long, val urgentOffsetMillis: Long?)
+
+private suspend fun loadArmSettings(context: Context): ArmSettings {
     val settingsRepo = SettingsRepository(context)
     val offsetMinutes = settingsRepo.notificationOffsetMinutes.first()
     val urgentEnabled = settingsRepo.urgentReminderEnabled.first()
     val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
-    val reminderOffsetMillis = offsetMinutes * 60_000L
-    val urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
+    return ArmSettings(
+        reminderOffsetMillis = offsetMinutes * 60_000L,
+        urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
+    )
+}
 
+/**
+ * Brings one parked car fully up to date: recomputes its sweep deadline from the segment as it is
+ * NOW (so a "Fix schedule" override, refreshed street data, or a sweep that has since passed are
+ * all picked up), stores it if it changed, then schedules both reminder families and their
+ * roll-forward alarms. Returns whether the stored deadline changed.
+ *
+ * A notification for a deadline that has been MOVED before it happened (an override or data
+ * change while it was still ahead) is stale, so those are cleared even when [clearStaleNotifications]
+ * is false. A deadline that merely PASSED and rolled to the next occurrence is not stale — its
+ * notification is what the user is looking at — so that case leaves notifications alone.
+ */
+private suspend fun armParkedState(
+    context: Context,
+    db: AppDatabase,
+    storedParked: ParkedState,
+    car: Car,
+    settings: ArmSettings,
+    clearStaleNotifications: Boolean
+): Boolean {
+    val now = System.currentTimeMillis()
+    var parked = storedParked
+    var deadlineChanged = false
+    var scheduleMoved = false
+
+    val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
+    // A segment that's gone (never synced, or retired upstream) keeps its stored deadline: a
+    // reminder that might be stale beats silently dropping one that might be real.
+    if (segment != null) {
+        val recomputed = NextSweepCalculator.nextSweepDateTime(segment)
+            ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+        val old = parked.nextSweepAtMillis
+        if (recomputed != old) {
+            android.util.Log.d("Park", "Recomputed sweep deadline for car ${parked.carId}: $old -> $recomputed")
+            db.parkedStateDao().updateNextSweep(parked.carId, parked.parkedAtMillis, recomputed)
+            parked = parked.copy(nextSweepAtMillis = recomputed)
+            deadlineChanged = true
+            scheduleMoved = old != null && old > now
+        }
+    }
+    val clearStale = clearStaleNotifications || scheduleMoved
+
+    val nextMillis = parked.nextSweepAtMillis
+    if (nextMillis != null) {
+        scheduleTiers(
+            context, parked.carId, car.name, segment?.corridor ?: "your parked street",
+            nextMillis, parked.parkedAtMillis,
+            ReminderKind.NORMAL, ReminderKind.URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
+            parked.normalDeliveredForMillis, parked.urgentDeliveredForMillis, clearStale,
+            RollForwardKind.SWEEP, nextMillis
+        )
+    } else {
+        // No upcoming occurrence: nothing to remind about, and any alarm left over is for a deadline that no longer exists.
+        cancelAlarm(context, parked.carId, ReminderKind.NORMAL)
+        cancelAlarm(context, parked.carId, ReminderKind.URGENT)
+        cancelRollForward(context, parked.carId, RollForwardKind.SWEEP)
+        if (clearStale) {
+            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.NORMAL))
+            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.URGENT))
+        }
+    }
+
+    val rpp = currentRppDeadline(db, parked, car)
+    if (rpp != null) {
+        scheduleTiers(
+            context, parked.carId, car.name,
+            "RPP Zone ${rpp.warning.zoneLetters.sorted().joinToString("/")}",
+            rpp.moveByMillis, parked.parkedAtMillis,
+            ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
+            parked.rppNormalDeliveredForMillis, parked.rppUrgentDeliveredForMillis, clearStaleNotifications,
+            RollForwardKind.RPP, rpp.rollForwardAtMillis
+        )
+    } else if (clearStaleNotifications) {
+        cancelRppReminder(context, parked.carId) // no regulation matched, car holds a permit, or nothing found
+    } else {
+        // Re-arm never touches notifications — only the (now pointless) alarms.
+        cancelAlarm(context, parked.carId, ReminderKind.RPP_NORMAL)
+        cancelAlarm(context, parked.carId, ReminderKind.RPP_URGENT)
+        cancelRollForward(context, parked.carId, RollForwardKind.RPP)
+    }
+    return deadlineChanged
+}
+
+private suspend fun armAllParkedStates(context: Context, clearStaleNotifications: Boolean) = armMutex.withLock {
+    val db = AppDatabase.getInstance(context)
+    val settings = loadArmSettings(context)
     val carsById = db.carDao().getAll().associateBy { it.id }
 
+    var anyDeadlineChanged = false
     db.parkedStateDao().getAll().forEach { parked ->
         val car = carsById[parked.carId] ?: return@forEach
+        if (armParkedState(context, db, parked, car, settings, clearStaleNotifications)) anyDeadlineChanged = true
+    }
+    // The widget shows the stored deadline, so it has to be redrawn when one moved.
+    if (anyDeadlineChanged) enqueueWidgetRefresh(context)
+}
 
-        val nextMillis = parked.nextSweepAtMillis
-        if (nextMillis != null) {
-            val corridor = parked.segmentBlockSweepId
-                ?.let { db.streetSegmentDao().getById(it) }
-                ?.corridor
-                ?: "your parked street"
-
-            scheduleTiers(
-                context, parked.carId, car.name, corridor, nextMillis, parked.parkedAtMillis,
-                ReminderKind.NORMAL, ReminderKind.URGENT, reminderOffsetMillis, urgentOffsetMillis,
-                parked.normalDeliveredForMillis, parked.urgentDeliveredForMillis, clearStaleNotifications
-            )
+/**
+ * Recomputes ONE car's sweep deadline from its segment as it is now and reschedules its reminders
+ * (see [armParkedState]). Called when something that feeds the deadline may have changed: a
+ * "Fix schedule" override saved or removed, a data refresh, or a roll-forward alarm firing.
+ * Because delivery markers are keyed by deadline value, a changed deadline invalidates them
+ * automatically — the new deadline's reminders are due afresh.
+ *
+ * [expectedParkedAtMillis], when given, makes this a no-op if the car has been re-parked since the
+ * caller (e.g. a roll-forward alarm) was set up — that alarm belonged to the old row.
+ */
+suspend fun recomputeParkedSchedule(context: Context, carId: Long, expectedParkedAtMillis: Long? = null) =
+    armMutex.withLock {
+        val db = AppDatabase.getInstance(context)
+        val parked = db.parkedStateDao().getForCar(carId) ?: return@withLock
+        if (expectedParkedAtMillis != null && parked.parkedAtMillis != expectedParkedAtMillis) {
+            android.util.Log.d("Park", "recomputeParkedSchedule: car $carId was re-parked since this was scheduled — ignoring")
+            return@withLock
         }
+        val car = db.carDao().getAll().firstOrNull { it.id == carId } ?: return@withLock
+        val changed = armParkedState(context, db, parked, car, loadArmSettings(context), clearStaleNotifications = false)
+        if (changed) enqueueWidgetRefresh(context)
+    }
 
-        val rpp = currentRppDeadlineMillis(db, parked, car)
-        if (rpp != null) {
-            val (deadline, moveByMillis) = rpp
-            scheduleTiers(
-                context, parked.carId, car.name,
-                "RPP Zone ${deadline.zoneLetters.sorted().joinToString("/")}",
-                moveByMillis, parked.parkedAtMillis,
-                ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, reminderOffsetMillis, urgentOffsetMillis,
-                parked.rppNormalDeliveredForMillis, parked.rppUrgentDeliveredForMillis, clearStaleNotifications
-            )
-        } else if (clearStaleNotifications) {
-            cancelRppReminder(context, parked.carId) // no regulation matched, car holds a permit, or nothing found
-        } else {
-            // Re-arm never touches notifications — only the (now pointless) alarms.
-            cancelAlarm(context, parked.carId, ReminderKind.RPP_NORMAL)
-            cancelAlarm(context, parked.carId, ReminderKind.RPP_URGENT)
-        }
+/** [recomputeParkedSchedule] for every parked car on [blockSweepId] — what an override save/remove needs. */
+suspend fun recomputeSchedulesForSegment(context: Context, blockSweepId: String) {
+    AppDatabase.getInstance(context).parkedStateDao().getForSegment(blockSweepId).forEach {
+        recomputeParkedSchedule(context, it.carId)
     }
 }
 
@@ -444,13 +646,29 @@ suspend fun rescheduleAllActiveReminders(context: Context) =
 
 /**
  * "Re-arm" path: restores every parked car's alarms after something wiped them (a reboot — see
- * BootReceiver — or the app being force-stopped) and is safe to call any number of times.
+ * BootReceiver — or the app being force-stopped) and is safe to call any number of times. Also
+ * the backstop for a missed roll-forward alarm, and what runs after a data sync.
+ *  - Each car's sweep deadline is first recomputed from its segment, so a deadline that has
+ *    passed rolls on to the next occurrence and an override or data change is picked up.
  *  - Triggers still in the future get an alarm.
  *  - A trigger that already elapsed while the deadline is still ahead fires immediately ONLY if
  *    that reminder was never delivered (the alarm was lost, i.e. a missed reminder).
- *  - It never cancels a notification, so a reminder the user can currently see stays put.
- *
- * Until T3 lands this uses the stored nextSweepAtMillis; T3 will recompute it first.
+ *  - It never cancels a notification the user can currently see, other than one for a deadline
+ *    that was moved before it happened.
  */
 suspend fun rearmAllActiveReminders(context: Context) =
     armAllParkedStates(context, clearStaleNotifications = false)
+
+/**
+ * Called after street data has been (re)loaded — a successful network sync or a manual import —
+ * so a parked car whose block's schedule changed upstream gets its deadline and alarms recomputed
+ * right away instead of waiting for the next app open. It's the same recompute as the re-arm, and
+ * never lets a failure here fail the sync that triggered it.
+ */
+suspend fun refreshParkedSchedulesAfterSync(context: Context) {
+    try {
+        rearmAllActiveReminders(context.applicationContext)
+    } catch (e: Exception) {
+        android.util.Log.w("Park", "Recomputing parked schedules after a data load failed", e)
+    }
+}

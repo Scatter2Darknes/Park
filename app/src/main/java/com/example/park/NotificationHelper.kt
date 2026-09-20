@@ -12,7 +12,10 @@ import androidx.core.app.NotificationManagerCompat
 // counterparts (see channelId/ongoing-notification logic below) — the two are otherwise
 // identical, just for a different deadline (RPP's non-permit time limit rather than a sweep
 // start time), so a separate pair of channels would add nothing besides more settings surface.
-enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT }
+// SWEEP_ACTIVE is the one kind that is not a scheduled tier: a one-off, dismissible "sweeping is
+// happening right now" notice posted when a car is parked inside an active sweep window. It has
+// no delivery marker, no snooze, and is never scheduled by an alarm.
+enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE }
 
 object NotificationHelper {
     const val CHANNEL_ID_NORMAL = "parking_reminders"
@@ -61,7 +64,10 @@ object NotificationHelper {
         nextSweepAtMillis: Long
     ): Boolean {
         val isUrgent = kind == ReminderKind.URGENT || kind == ReminderKind.RPP_URGENT
-        val channelId = if (isUrgent) CHANNEL_ID_URGENT else CHANNEL_ID_NORMAL
+        val isActiveNotice = kind == ReminderKind.SWEEP_ACTIVE
+        // "Sweeping is happening now" is as urgent as it gets, so it uses the urgent channel — but
+        // it's a one-off notice, so unlike the urgent reminders it's swipeable and has no actions.
+        val channelId = if (isUrgent || isActiveNotice) CHANNEL_ID_URGENT else CHANNEL_ID_NORMAL
         android.util.Log.d("Park", "showReminder: notificationId=$notificationId kind=$kind carId=$carId \u2014 building notification")
         // Per-channel enablement is separate from the app-level POST_NOTIFICATIONS
         // permission check below — Android lets someone disable "Parking Reminders" while
@@ -95,21 +101,25 @@ object NotificationHelper {
         )
         builder.setContentIntent(contentPendingIntent)
 
-        val snoozeIntent = Intent(context, SnoozeReminderReceiver::class.java).apply {
-            putExtra("notificationId", notificationId)
-            putExtra("carId", carId)
-            putExtra("carName", carName)
-            putExtra("corridor", corridor)
-            putExtra("nextSweepAtMillis", nextSweepAtMillis)
-            putExtra("kind", kind.name)
+        // Snoozing "sweeping is in progress right now" makes no sense (there's nothing to come
+        // back to in 10 minutes), so the active notice gets no Snooze action.
+        if (!isActiveNotice) {
+            val snoozeIntent = Intent(context, SnoozeReminderReceiver::class.java).apply {
+                putExtra("notificationId", notificationId)
+                putExtra("carId", carId)
+                putExtra("carName", carName)
+                putExtra("corridor", corridor)
+                putExtra("nextSweepAtMillis", nextSweepAtMillis)
+                putExtra("kind", kind.name)
+            }
+            val snoozePendingIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId,
+                snoozeIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_menu_recent_history, "Snooze 10 min", snoozePendingIntent)
         }
-        val snoozePendingIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId,
-            snoozeIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(android.R.drawable.ic_menu_recent_history, "Snooze 10 min", snoozePendingIntent)
 
         if (isUrgent) {
             val dismissIntent = Intent(context, DismissReminderReceiver::class.java).apply {
@@ -129,7 +139,7 @@ object NotificationHelper {
             builder.setAutoCancel(true)
             builder.setCategory(NotificationCompat.CATEGORY_ALARM)
         } else {
-            builder.setCategory(NotificationCompat.CATEGORY_REMINDER)
+            builder.setCategory(if (isActiveNotice) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_REMINDER)
             builder.setAutoCancel(true)
         }
 

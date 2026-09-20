@@ -1243,6 +1243,10 @@ fun MapScreen(
                 onOverrideChanged = {
                     // Force an immediate redraw so the corrected color/schedule shows right
                     // away, rather than waiting for the next pan-triggered reload.
+                    //
+                    // The parked-cars banner (and widget) show each car's stored deadline, which
+                    // the sheet has just recomputed from the corrected schedule — reload them too.
+                    scope.launch { refreshActiveParkedCars() }
                     mapViewRef?.let { mv ->
                         scope.launch {
                             reloadSegmentsAndMarkers(

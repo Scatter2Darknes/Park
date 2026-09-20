@@ -308,6 +308,7 @@ object StreetDataSyncCenter {
                         // StreetSegmentRepository \u2014 a manual import is just as valid a
                         // "sync completed" event as a network one.
                         SettingsRepository(context).setLastRefreshMillis(System.currentTimeMillis())
+                        refreshParkedSchedulesAfterSync(context)
                         _statusMessage.value = "Imported ${"%,d".format(parsed.size)} segments."
                     }
                 }
