@@ -1,0 +1,22 @@
+# R8 in "shrink only" mode for release builds: it removes code and resources nothing reaches, and
+# does nothing else.
+#
+# -dontoptimize: no R8 code optimizations (inlining, class merging, ...). AGP 9 always includes its
+# own default rules file (proguard-android-optimize.txt) and no longer accepts the old
+# non-"optimize" one, so switching optimization off is done here.
+-dontoptimize
+
+# -dontobfuscate: keep every class and method NAME as written. The app's own crash handler writes
+# stack traces on the device (see CrashHandler.kt) and there is no mapping file to de-obfuscate them
+# with, so they must stay readable. It also keeps anything looked up by name — e.g.
+# ReminderKind.valueOf(String) — working exactly as before, since shrinking only ever REMOVES code.
+-dontobfuscate
+
+# Line numbers in stack traces (with names kept, this is what makes them fully readable).
+-keepattributes SourceFile,LineNumberTable
+
+# WorkManager creates its default input merger by looking up the class's constructor BY NAME
+# (androidx.work.InputMerger.fromClassName). Nothing references that constructor directly, so R8's
+# shrinking removed it and every work request then failed with "Could not create Input Merger
+# androidx.work.OverwritingInputMerger" (seen in Logcat on the first shrunk release build).
+-keep class * extends androidx.work.InputMerger { <init>(); }

@@ -23,7 +23,11 @@ android {
     buildTypes {
         release {
             optimization {
-                enable = false
+                // R8 SHRINK ONLY: removes unreachable code and resources, nothing else. The extra
+                // rules (-dontoptimize, -dontobfuscate so the on-device crash handler's stack
+                // traces stay readable) are in src/main/keepRules/park.keep, which AGP picks up
+                // by itself; AGP also adds its own default rules file automatically.
+                enable = true
             }
         }
     }
