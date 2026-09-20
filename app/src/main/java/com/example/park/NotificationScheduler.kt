@@ -422,7 +422,7 @@ suspend fun scheduleRppReminders(
 fun rppWindowEndMillis(regulation: RppZoneRegulation, moveBy: LocalDateTime): Long {
     val windowEnd = moveBy.toLocalDate().atTime(militaryHourToLocalTime(regulation.hrsEnd))
     return (if (windowEnd.isAfter(moveBy)) windowEnd else moveBy)
-        .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        .atZone(SF_ZONE).toInstant().toEpochMilli()
 }
 
 /** Cancels both RPP alarm tiers, the RPP roll-forward alarm, and any currently-shown RPP notifications for a car. */
@@ -476,11 +476,11 @@ private suspend fun currentRppDeadline(
     car: Car
 ): RppDeadlineInfo? {
     val regulation = parked.rppRegulationId?.let { db.rppZoneRegulationDao().getById(it) } ?: return null
-    val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
-    val warning = nextRppDeadline(regulation, car, parkedSince, LocalDateTime.now()) ?: return null
+    val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
+    val warning = nextRppDeadline(regulation, car, parkedSince, sfNow()) ?: return null
     return RppDeadlineInfo(
         warning,
-        warning.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+        warning.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli(),
         rppWindowEndMillis(regulation, warning.moveByDateTime)
     )
 }
@@ -533,7 +533,7 @@ private suspend fun armParkedState(
     // reminder that might be stale beats silently dropping one that might be real.
     if (segment != null) {
         val recomputed = NextSweepCalculator.nextSweepDateTime(segment)
-            ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+            ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         val old = parked.nextSweepAtMillis
         if (recomputed != old) {
             android.util.Log.d("Park", "Recomputed sweep deadline for car ${parked.carId}: $old -> $recomputed")

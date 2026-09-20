@@ -300,7 +300,7 @@ suspend fun refreshParkedCarOverlays(
                 position = GeoPoint(parked.exactPinLat, parked.exactPinLng)
                 title = car.name
                 snippet = parked.nextSweepAtMillis?.let {
-                    val dt = java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault())
+                    val dt = java.time.Instant.ofEpochMilli(it).atZone(SF_ZONE)
                     "Next cleaning: ${dt.toLocalDate()}"
                 } ?: "No schedule found"
                 icon = buildCarMarkerIcon(context, car)
@@ -709,7 +709,7 @@ suspend fun loadAndDrawSegments(
         emptyList()
     }
 
-    val now = java.time.LocalDateTime.now()
+    val now = sfNow()
 
     // Computed once per segment, shared between line-drawing and label-selection below —
     // avoids recomputing offset/trim/status twice, and lets label selection see every

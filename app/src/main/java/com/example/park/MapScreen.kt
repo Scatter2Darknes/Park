@@ -1085,7 +1085,7 @@ fun MapScreen(
                                     val itemDeadline = item.soonestDeadline()
                                     val itemNextText = itemDeadline?.let {
                                         val dt = java.time.Instant.ofEpochMilli(it.millis)
-                                            .atZone(java.time.ZoneId.systemDefault())
+                                            .atZone(SF_ZONE)
                                         val base = formatSweepDateTime(dt)
                                         if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
                                     } ?: "No cleaning schedule found"

@@ -21,7 +21,7 @@ data class CarDeadline(val millis: Long, val kind: DeadlineKind)
 fun CarWithStatus.soonestDeadline(): CarDeadline? {
     val sweep = parkedState?.nextSweepAtMillis?.let { CarDeadline(it, DeadlineKind.SWEEP) }
     val rpp = rppDeadline?.moveByDateTime
-        ?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+        ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         ?.let { CarDeadline(it, DeadlineKind.RPP) }
     return listOfNotNull(sweep, rpp).minByOrNull { it.millis }
 }

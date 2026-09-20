@@ -41,6 +41,6 @@ suspend fun findConfidentRppMatch(context: Context, point: LatLng): RppZoneRegul
 suspend fun resolveRppDeadline(context: Context, parked: ParkedState, car: Car): RppWarning? {
     val regulationId = parked.rppRegulationId ?: return null
     val regulation = AppDatabase.getInstance(context).rppZoneRegulationDao().getById(regulationId) ?: return null
-    val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
-    return nextRppDeadline(regulation, car, parkedSince, LocalDateTime.now())
+    val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
+    return nextRppDeadline(regulation, car, parkedSince, sfNow())
 }

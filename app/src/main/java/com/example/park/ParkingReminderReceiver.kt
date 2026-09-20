@@ -26,7 +26,7 @@ fun buildReminderContent(
     kind: ReminderKind
 ): Pair<String, String> {
     val timeText = if (nextSweepAtMillis > 0) {
-        formatSweepDateTime(Instant.ofEpochMilli(nextSweepAtMillis).atZone(ZoneId.systemDefault()))
+        formatSweepDateTime(Instant.ofEpochMilli(nextSweepAtMillis).atZone(SF_ZONE))
     } else null
 
     return when (kind) {

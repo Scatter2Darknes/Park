@@ -69,7 +69,7 @@ private fun parseColorOrDefault(hex: String, default: String): Color = try {
 
 fun sweepStatus(
     segment: StreetSegment,
-    now: LocalDateTime = LocalDateTime.now(),
+    now: LocalDateTime = sfNow(),
     thresholds: SweepThresholds = SweepThresholds()
 ): SweepStatus {
     val targetDay = NextSweepCalculator.dayOfWeekFromName(segment.fullName)

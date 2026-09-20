@@ -274,7 +274,7 @@ private fun CarRow(
 
         if (item.parkedState != null) {
             val nextText = item.parkedState.nextSweepAtMillis?.let {
-                val dt = java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault())
+                val dt = java.time.Instant.ofEpochMilli(it).atZone(SF_ZONE)
                 "Next cleaning: ${formatSweepDateTime(dt)}"
             } ?: "No cleaning schedule found"
             Text(text = "Parked \u2014 $nextText", style = MaterialTheme.typography.bodySmall)
@@ -286,7 +286,7 @@ private fun CarRow(
             item.rppDeadline?.let { deadline ->
                 Text(
                     text = "RPP Zone ${deadline.zoneLetters.sorted().joinToString("/")} \u2014 " +
-                            "move by ${formatSweepDateTime(deadline.moveByDateTime.atZone(java.time.ZoneId.systemDefault()))}",
+                            "move by ${formatSweepDateTime(deadline.moveByDateTime.atZone(SF_ZONE))}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )

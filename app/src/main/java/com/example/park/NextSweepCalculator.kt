@@ -18,7 +18,7 @@ object NextSweepCalculator {
 
     fun nextSweepDateTime(
         segment: StreetSegment,
-        from: LocalDateTime = LocalDateTime.now(),
+        from: LocalDateTime = sfNow(),
         maxDaysToSearch: Int = DEFAULT_MAX_DAYS_TO_SEARCH
     ): LocalDateTime? {
         val targetDay = dayOfWeekFromName(segment.fullName) ?: return null

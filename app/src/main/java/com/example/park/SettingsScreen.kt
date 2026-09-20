@@ -462,7 +462,7 @@ fun SettingsScreen(
             Button(onClick = {
                 val exampleSweepMillis = System.currentTimeMillis() + 2 * 60 * 60_000L
                 val exampleTime = formatSweepDateTime(
-                    java.time.Instant.ofEpochMilli(exampleSweepMillis).atZone(java.time.ZoneId.systemDefault())
+                    java.time.Instant.ofEpochMilli(exampleSweepMillis).atZone(SF_ZONE)
                 )
                 NotificationHelper.showReminder(
                     context = context,
@@ -480,7 +480,7 @@ fun SettingsScreen(
             Button(onClick = {
                 val exampleSweepMillis = System.currentTimeMillis() + 15 * 60_000L
                 val exampleTime = formatSweepDateTime(
-                    java.time.Instant.ofEpochMilli(exampleSweepMillis).atZone(java.time.ZoneId.systemDefault())
+                    java.time.Instant.ofEpochMilli(exampleSweepMillis).atZone(SF_ZONE)
                 )
                 NotificationHelper.showReminder(
                     context = context,
@@ -500,7 +500,7 @@ fun SettingsScreen(
             Button(onClick = {
                 val exampleDeadlineMillis = System.currentTimeMillis() + 2 * 60 * 60_000L
                 val exampleTime = formatSweepDateTime(
-                    java.time.Instant.ofEpochMilli(exampleDeadlineMillis).atZone(java.time.ZoneId.systemDefault())
+                    java.time.Instant.ofEpochMilli(exampleDeadlineMillis).atZone(SF_ZONE)
                 )
                 NotificationHelper.showReminder(
                     context = context,
@@ -518,7 +518,7 @@ fun SettingsScreen(
             Button(onClick = {
                 val exampleDeadlineMillis = System.currentTimeMillis() + 15 * 60_000L
                 val exampleTime = formatSweepDateTime(
-                    java.time.Instant.ofEpochMilli(exampleDeadlineMillis).atZone(java.time.ZoneId.systemDefault())
+                    java.time.Instant.ofEpochMilli(exampleDeadlineMillis).atZone(SF_ZONE)
                 )
                 NotificationHelper.showReminder(
                     context = context,

@@ -61,9 +61,9 @@ suspend fun saveParkedState(
 ) {
     val db = AppDatabase.getInstance(context)
     val parkedAtMillis = System.currentTimeMillis()
-    val parkedAt = java.time.Instant.ofEpochMilli(parkedAtMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
+    val parkedAt = java.time.Instant.ofEpochMilli(parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
     val next = NextSweepCalculator.nextSweepDateTime(segment)
-    val nextMillis = next?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+    val nextMillis = next?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
 
     // RPP is matched against the CONFIRMED segment's curb-side location, not the raw [point] —
     // point is whatever GPS fix (or map tap) started this parking flow, which the manual-pick
@@ -140,12 +140,12 @@ suspend fun saveParkedState(
             carId = carId,
             carName = car?.name ?: "Your car",
             zoneLabel = "RPP Zone ${rppDeadline.zoneLetters.sorted().joinToString("/")}",
-            moveByAtMillis = rppDeadline.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            moveByAtMillis = rppDeadline.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli(),
             parkedAtMillis = parkedAtMillis,
             reminderOffsetMillis = reminderOffsetMillis,
             urgentOffsetMillis = urgentOffsetMillis,
             rollForwardAtMillis = rppRegulation?.let { rppWindowEndMillis(it, rppDeadline.moveByDateTime) }
-                ?: rppDeadline.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                ?: rppDeadline.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli()
         )
     } else {
         cancelRppReminder(context, carId) // no RPP match here, car holds a permit, or re-parking away from a previous RPP spot
@@ -161,7 +161,7 @@ suspend fun saveParkedState(
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
     val sweepEnd = NextSweepCalculator.sweepInProgressEndDateTime(segment, parkedAt)
     if (sweepEnd != null) {
-        val endMillis = sweepEnd.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endMillis = sweepEnd.atZone(SF_ZONE).toInstant().toEpochMilli()
         val carName = car?.name ?: "Your car"
         val (title, text) = buildReminderContent(carName, segment.corridor, endMillis, ReminderKind.SWEEP_ACTIVE)
         NotificationHelper.showReminder(

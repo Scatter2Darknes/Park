@@ -216,7 +216,7 @@ private suspend fun loadWidgetSummary(context: Context): WidgetSummary {
     val deadline = mostUrgent.soonestDeadline()
     val countdown = deadline?.let { formatCountdown(it.millis - System.currentTimeMillis()) }
     val nextText = deadline?.let {
-        val base = formatSweepDateTime(Instant.ofEpochMilli(it.millis).atZone(ZoneId.systemDefault()))
+        val base = formatSweepDateTime(Instant.ofEpochMilli(it.millis).atZone(SF_ZONE))
         if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
     }
 

@@ -79,7 +79,7 @@ fun SegmentDetailSheet(
 
             val next = NextSweepCalculator.nextSweepDateTime(segment)
             if (next != null) {
-                val daysUntil = ChronoUnit.DAYS.between(LocalDate.now(), next.toLocalDate())
+                val daysUntil = ChronoUnit.DAYS.between(sfNow().toLocalDate(), next.toLocalDate())
                 val label = when {
                     daysUntil == 0L -> "Today"
                     daysUntil == 1L -> "Tomorrow"
@@ -174,7 +174,7 @@ private fun BlockSideCompass(degrees: Double, modifier: Modifier = Modifier) {
 
 @Composable
 private fun SweepCalendarGrid(segment: StreetSegment, weeksToShow: Int) {
-    val today = LocalDate.now()
+    val today = sfNow().toLocalDate()
     val daysFromSunday = today.dayOfWeek.value % 7 // Mon=1...Sun=7, so Sunday becomes 0
     val startOfWeek = today.minusDays(daysFromSunday.toLong())
 
