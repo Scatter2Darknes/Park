@@ -17,10 +17,32 @@ import java.time.temporal.TemporalAdjusters
  *    represents — is suspended on the full list below.
  *  - "Nightly Street Sweeping" (12am-6am, 7-day/week commercial routes) is suspended only on
  *    the 3 major holidays (New Year's, Thanksgiving, Christmas).
- * StreetSegment.holidays (from DataSF's "1 = swept on holidays" field) is the signal for which
- * list applies to a given segment — see holidayName.
+ * Which list applies to a segment is decided by [isNightlyRoute] — see it for why this is NOT
+ * just StreetSegment.holidays.
  */
 object SfHolidayCalendar {
+
+    /** A route that starts sweeping before this hour is treated as a nightly (12am-6am) route. */
+    const val NIGHTLY_ROUTE_STARTS_BEFORE_HOUR = 6
+
+    /**
+     * Whether [segment] follows the short (3 major holidays) suspension list rather than the full one.
+     *
+     * The original assumption was that DataSF's `holidays = 1` flag marks the nightly routes. A
+     * check of the live feed (grouping every segment by holidays/fromhour/tohour) disproved it:
+     * `holidays = 1` rows have all sorts of hours (0-2, 1-3, 2-6, 4-6, 5-7, 6-8 ...), while the
+     * overnight rows are spread across BOTH flag values (e.g. 4,418 rows at 2-6 with holidays = 0).
+     * The flag alone would therefore treat most nightly routes as suspended on every holiday, which is
+     * the dangerous direction here — the app would show a street as safe on a day the sweeper comes.
+     *
+     * So a route counts as nightly if EITHER the flag says it's swept on holidays OR it starts before
+     * 6am. Each half only ever moves a segment to the shorter list (fewer suspensions), so wherever
+     * the two signals disagree the result is the conservative one: an unnecessary reminder is better
+     * than a missed sweep.
+     */
+    fun isNightlyRoute(segment: StreetSegment): Boolean =
+        segment.holidays || segment.fromHour < NIGHTLY_ROUTE_STARTS_BEFORE_HOUR
+
 
     fun fullSuspensionHolidays(year: Int): Map<LocalDate, String> = buildMap {
         put(observedNewYearsDay(year), "New Year's Day")
@@ -51,12 +73,11 @@ object SfHolidayCalendar {
 
     /**
      * The name of the holiday [date] falls on for [segment]'s route, or null if [date] isn't
-     * a suspended holiday for it. Segments with holidays=true are DataSF's "swept on holidays"
-     * routes (nightly/commercial — only the 3 major holidays suspend them); holidays=false is
-     * an ordinary weekday route (suspended on the full list).
+     * a suspended holiday for it. Nightly routes ([isNightlyRoute]) are only suspended on the 3
+     * major holidays; every other segment is an ordinary weekday route (suspended on the full list).
      */
     fun holidayName(date: LocalDate, segment: StreetSegment): String? {
-        val holidays = if (segment.holidays) majorHolidaysOnly(date.year) else fullSuspensionHolidays(date.year)
+        val holidays = if (isNightlyRoute(segment)) majorHolidaysOnly(date.year) else fullSuspensionHolidays(date.year)
         return holidays[date]
     }
 

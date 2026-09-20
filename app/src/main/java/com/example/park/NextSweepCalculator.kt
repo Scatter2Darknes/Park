@@ -5,10 +5,21 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 object NextSweepCalculator {
+    /**
+     * How far ahead [nextSweepDateTime] looks before giving up (which callers treat as "no upcoming
+     * sweep": SAFE on the map, no reminder at park time). Was 60 days, which is too short for a
+     * schedule that only runs on a month's 5th occurrence of a weekday ("Mon 1st, 3rd, 5th" is
+     * common, and a 5th-only override is possible): a given weekday only has a 5th occurrence in
+     * some months, and holiday suspensions can remove one. Brute-forcing every weekday over
+     * 2026-2035 found gaps of up to 210 days (a Monday in 2033), so 250 covers every real case with
+     * margin. Costs nothing for ordinary schedules, which return within a week.
+     */
+    const val DEFAULT_MAX_DAYS_TO_SEARCH = 250
+
     fun nextSweepDateTime(
         segment: StreetSegment,
         from: LocalDateTime = LocalDateTime.now(),
-        maxDaysToSearch: Int = 60
+        maxDaysToSearch: Int = DEFAULT_MAX_DAYS_TO_SEARCH
     ): LocalDateTime? {
         val targetDay = dayOfWeekFromName(segment.fullName) ?: return null
         val weekFlags = listOf(segment.week1, segment.week2, segment.week3, segment.week4, segment.week5)
