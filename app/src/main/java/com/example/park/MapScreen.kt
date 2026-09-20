@@ -1,13 +1,9 @@
 package com.example.park
 
 import android.Manifest
-import android.app.AlarmManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
-import android.os.Build
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -38,6 +34,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -113,17 +110,6 @@ private const val TUNNEL_GAP_THRESHOLD_MS = 20000L
 // speeds, without re-querying Room and redrawing every single overlay on every 1s GPS tick.
 private const val SEGMENT_RELOAD_THROTTLE_MS = 2500L
 
-fun ensureExactAlarmPermission(context: Context) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java)
-        if (!alarmManager.canScheduleExactAlarms()) {
-            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                data = android.net.Uri.parse("package:${context.packageName}")
-            }
-            context.startActivity(intent)
-        }
-    }
-}
 @Composable
 fun MapScreen(
     onNavigateToManageCars: () -> Unit,
@@ -159,8 +145,20 @@ fun MapScreen(
     // Android's own guidance discourages asking before the person has any context for why,
     // and this was stacking a second system permission dialog right on top of the location
     // one and the sync setup dialog on every cold start.
-    LaunchedEffect(Unit) {
-        ensureExactAlarmPermission(context)
+    //
+    // The exact-alarm ("Alarms & reminders") access is NOT auto-prompted here either. It used to
+    // be, from a LaunchedEffect(Unit) — but MapScreen remounts on every navigation, so someone
+    // who declined got thrown back into the system settings page over and over. It's now a Settings
+    // row plus the persistent warning banner below, both of which only open that page on a tap.
+    // Re-read on every ON_RESUME so the banner disappears as soon as they grant it and come back.
+    var exactAlarmsAllowed by remember { mutableStateOf(canScheduleExactAlarmsCompat(context)) }
+    val exactAlarmLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(exactAlarmLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) exactAlarmsAllowed = canScheduleExactAlarmsCompat(context)
+        }
+        exactAlarmLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { exactAlarmLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
 
@@ -969,8 +967,40 @@ fun MapScreen(
                     .padding(top = TOP_BANNER_CLEARANCE, start = 12.dp, end = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Priority (parked-cars) banner goes FIRST and unconditionally occupies this
-                // slot whenever there's anything parked — everything else in this Column
+                // Exact-alarm warning is the MOST persistent element here — it stays for as long as
+                // a parked car has reminders and the permission is missing, and only changes when
+                // the user grants it (outside this screen), never on its own — so it goes first,
+                // above even the parked-cars banner, and nothing transient can push it around.
+                // Its whole purpose is to be seen: without the permission, reminders fall back to
+                // inexact alarms that Android may deliver minutes late.
+                val hasCarWithReminders = activeParkedCars.any {
+                    it.parkedState?.nextSweepAtMillis != null || it.rppDeadline != null
+                }
+                if (exactAlarmPermissionApplies() && !exactAlarmsAllowed && hasCarWithReminders) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp)
+                        ) {
+                            Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Reminders may arrive late — exact alarms are off",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            TextButton(onClick = { openExactAlarmSettings(context) }) { Text("Fix") }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // Priority (parked-cars) banner goes next and unconditionally occupies its slot
+                // whenever there's anything parked — everything else in this Column after it
                 // (toast, ambiguity banner) is appended AFTER it, so it never shifts position
                 // when those pop in or out. Previously this was last, which meant a toast or
                 // ambiguity banner appearing/disappearing pushed this banner up and down the

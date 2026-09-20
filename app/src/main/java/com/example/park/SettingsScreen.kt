@@ -99,6 +99,7 @@ fun SettingsScreen(
     var apiKeyStatusMessage by remember { mutableStateOf<String?>(null) }
     var batteryOptimizationExempt by remember { mutableStateOf(false) }
     var hasBackgroundLocation by remember { mutableStateOf(false) }
+    var hasExactAlarmPermission by remember { mutableStateOf(canScheduleExactAlarmsCompat(context)) }
     var hasNotificationPermission by remember {
         mutableStateOf(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -169,6 +170,7 @@ fun SettingsScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 batteryOptimizationExempt = isIgnoringBatteryOptimizations(context)
                 hasBackgroundLocation = hasBackgroundLocationPermission(context)
+                hasExactAlarmPermission = canScheduleExactAlarmsCompat(context)
                 hasNotificationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             }
@@ -396,6 +398,46 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+            }
+        }
+
+        // Below Android 12 exact alarms need no permission, so there's nothing to show.
+        if (exactAlarmPermissionApplies()) {
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+
+            SectionLabel("Exact alarms")
+            DescriptionToggle(
+                "Reminders are timed with exact alarms, which Android 12+ treats as a special " +
+                        "permission (\"Alarms & reminders\"). Android 14+ leaves it off on a fresh " +
+                        "install. Without it, reminders still fire but use a less precise alarm " +
+                        "that Android may delay by several minutes — not what you want when a " +
+                        "reminder is meant to beat the street sweeper. Android can't grant this " +
+                        "from inside the app; the button opens the system page where you switch it on."
+            )
+            Spacer(Modifier.height(8.dp))
+            if (hasExactAlarmPermission) {
+                StatusOkRow("Exact alarms allowed")
+                Spacer(Modifier.height(8.dp))
+                DescriptionToggle(
+                    "To turn this back off, use the same page — Android doesn't let an app " +
+                            "revoke its own permission. (Turning it off makes Android stop the " +
+                            "app; reminders are restored, as less precise ones, next time it opens.)"
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { openExactAlarmSettings(context) }) {
+                    Text("Open Alarms & Reminders Settings")
+                }
+            } else {
+                Text(
+                    "Not allowed — reminders may arrive late",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { openExactAlarmSettings(context) }) {
+                    Text("Allow Exact Alarms")
                 }
             }
         }
