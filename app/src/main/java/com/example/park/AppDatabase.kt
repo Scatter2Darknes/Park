@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -114,6 +114,7 @@ suspend fun saveParkedState(
             carName = car?.name ?: "Your car",
             corridor = segment.corridor,
             nextSweepAtMillis = nextMillis,
+            parkedAtMillis = parkedAtMillis, // markers default to null: this is a brand-new row, nothing delivered yet
             reminderOffsetMillis = reminderOffsetMillis,
             urgentOffsetMillis = urgentOffsetMillis
         )
@@ -137,6 +138,7 @@ suspend fun saveParkedState(
             carName = car?.name ?: "Your car",
             zoneLabel = "RPP Zone ${rppDeadline.zoneLetters.sorted().joinToString("/")}",
             moveByAtMillis = rppDeadline.moveByDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            parkedAtMillis = parkedAtMillis,
             reminderOffsetMillis = reminderOffsetMillis,
             urgentOffsetMillis = urgentOffsetMillis
         )

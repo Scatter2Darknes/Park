@@ -3,6 +3,10 @@ package com.example.park
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 
@@ -43,13 +47,16 @@ class ParkingReminderReceiver : BroadcastReceiver() {
         val carName = intent.getStringExtra("carName") ?: "Your car"
         val corridor = intent.getStringExtra("corridor") ?: "your parked street"
         val nextSweepAtMillis = intent.getLongExtra("nextSweepAtMillis", -1L)
+        val parkedAtMillis = intent.getLongExtra("parkedAtMillis", -1L)
         val kind = intent.getStringExtra("kind")
             ?.let { runCatching { ReminderKind.valueOf(it) }.getOrNull() }
             ?: ReminderKind.NORMAL
 
         val (title, text) = buildReminderContent(carName, corridor, nextSweepAtMillis, kind)
 
-        NotificationHelper.showReminder(
+        // Posted synchronously, before any database work, so the reminder itself never depends
+        // on Room being ready.
+        val posted = NotificationHelper.showReminder(
             context = context,
             notificationId = reminderNotificationId(carId, kind),
             kind = kind,
@@ -60,5 +67,28 @@ class ParkingReminderReceiver : BroadcastReceiver() {
             corridor = corridor,
             nextSweepAtMillis = nextSweepAtMillis
         )
+
+        // Snoozed alarms carry no parkedAtMillis (their marker was recorded when the original
+        // fired), and a notification that wasn't actually posted isn't a delivery.
+        if (!posted || carId < 0 || parkedAtMillis < 0 || nextSweepAtMillis <= 0) return
+
+        // A receiver's process can be killed as soon as onReceive() returns, which would cut a
+        // database write off halfway. goAsync() tells the system "I'm not done yet" and hands
+        // back a PendingResult; the work then runs in a coroutine (Kotlin's lightweight
+        // background task) and finish() releases the receiver when it's done. finish() sits in
+        // `finally` so it runs even if the write throws — otherwise the system would hold the
+        // receiver open until its ~10 second timeout. (WorkManager was rejected for this: it's
+        // heavier than a single UPDATE needs, and setExpedited crashes below API 31.)
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                recordReminderDelivery(context.applicationContext, carId, parkedAtMillis, kind, nextSweepAtMillis)
+            } catch (e: Exception) {
+                // Worst case a later re-arm re-posts this reminder once — annoying, not unsafe.
+                Log.w("Park", "ParkingReminderReceiver: failed to record delivery of $kind for car $carId", e)
+            } finally {
+                pendingResult.finish()
+            }
+        }
     }
 }

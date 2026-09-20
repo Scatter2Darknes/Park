@@ -113,8 +113,22 @@ val MIGRATION_10_11 = Migration(10, 11) { db ->
     db.execSQL("ALTER TABLE parked_state ADD COLUMN rppRegulationId TEXT")
 }
 
+/**
+ * v11 -> v12: adds the four reminder delivery markers to parked_state (see the comment on
+ * ParkedState for what they mean). All nullable INTEGER and purely additive, so an existing
+ * parked row keeps every value and gets NULL markers — "nothing delivered yet," which is at worst
+ * one harmless re-delivery of a reminder that already fired before the upgrade.
+ */
+val MIGRATION_11_12 = Migration(11, 12) { db ->
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN normalDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN urgentDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN rppNormalDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN rppUrgentDeliveredForMillis INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
-    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11
+    MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+    MIGRATION_11_12
 )
 
 /*

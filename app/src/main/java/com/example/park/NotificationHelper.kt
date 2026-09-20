@@ -42,6 +42,9 @@ object NotificationHelper {
     }
 
     /**
+     * @return true if the notification was handed to the system, false if it was NOT posted
+     *   because POST_NOTIFICATIONS isn't granted — callers use this to decide whether a
+     *   reminder counts as delivered (see ParkedState's delivery markers).
      * @param carId Needed (in addition to the already-formatted title/text) so tapping the
      *   notification opens the app centered on that car's parked spot — see the
      *   "reminderCarId" extra below and MainActivity's handling of it.
@@ -56,7 +59,7 @@ object NotificationHelper {
         carName: String,
         corridor: String,
         nextSweepAtMillis: Long
-    ) {
+    ): Boolean {
         val isUrgent = kind == ReminderKind.URGENT || kind == ReminderKind.RPP_URGENT
         val channelId = if (isUrgent) CHANNEL_ID_URGENT else CHANNEL_ID_NORMAL
         android.util.Log.d("Park", "showReminder: notificationId=$notificationId kind=$kind carId=$carId \u2014 building notification")
@@ -138,6 +141,7 @@ object NotificationHelper {
         if (hasPermission) {
             NotificationManagerCompat.from(context).notify(notificationId, notification)
             android.util.Log.d("Park", "showReminder: notify() called for notificationId=$notificationId")
+            return true
         } else {
             // The most likely explanation for "the test button does nothing" — this check
             // fails completely silently otherwise, with no log, no toast, no exception.
@@ -150,6 +154,7 @@ object NotificationHelper {
                         "POST_NOTIFICATIONS not granted (areNotificationsEnabled=" +
                         "${NotificationManagerCompat.from(context).areNotificationsEnabled()})"
             )
+            return false
         }
     }
 

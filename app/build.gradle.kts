@@ -32,6 +32,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    sourceSets {
+        // MigrationTestHelper reads the exported schemas/*.json as test assets to build a
+        // database at an OLD version — without this the androidTest can't find them.
+        getByName("androidTest").assets.directories.add("$projectDir/schemas")
+    }
     buildFeatures {
         compose = true
         // Required for BuildConfig.VERSION_NAME/VERSION_CODE (used in SettingsScreen's
