@@ -16,16 +16,16 @@ Working document for Claude Code. Produced from a static code review plus an arc
 
 | Task | Branch | State |
 |---|---|---|
-| T0 `holidays` flag check (Z runs a query) | n/a | not started |
-| T1 Re-arm + delivery markers (Room v12) | `rearm-reminders` | not started |
-| T2 Exact-alarm flow | `exact-alarm-flow` | not started |
-| T3 Schedule recompute, roll-forward, active-window notice | `schedule-recompute` | not started |
-| T4 Bluetooth notification channel + timeouts | `bt-notif-timeouts` | not started |
-| T5 Tunnel detection | `tunnel-detection` | not started |
-| T6 Sweep-logic tests | `sweep-tests` | not started |
-| T7 RPP fixes | `rpp-fixes` | not started |
-| T8 Stale-row cleanup | `stale-rows` | not started |
-| T9 Build + hygiene | `build-hygiene` | not started |
+| T0 `holidays` flag check (Z runs a query) | n/a | done (run by Claude on raw data; assumption disproved — see Decisions log and `docs/investigations/F1-raw-data-findings.md`) |
+| T1 Re-arm + delivery markers (Room v12) | `rearm-reminders` | code done; awaiting device test |
+| T2 Exact-alarm flow | `exact-alarm-flow` | code done; awaiting device test |
+| T3 Schedule recompute, roll-forward, active-window notice | `schedule-recompute` | code done; awaiting device test |
+| T4 Bluetooth notification channel + timeouts | `bt-notif-timeouts` | code done; awaiting device test |
+| T5 Tunnel detection | `tunnel-detection` | code done; awaiting device test |
+| T6 Sweep-logic tests | `sweep-tests` | done (JVM tests pass) |
+| T7 RPP fixes | `rpp-fixes` | done (JVM tests pass) |
+| T8 Stale-row cleanup | `stale-rows` | code done; migration test passed on emulator |
+| T9 Build + hygiene | `build-hygiene` | code done; release APK smoke-tested on emulator, awaiting device test |
 
 ### Invariants: do not regress
 
@@ -52,6 +52,8 @@ Working document for Claude Code. Produced from a static code review plus an arc
 | Tunnel detection | Speed gate + reset + cooldown + setting, keep ~20 s gap threshold |
 | API keys | Accept the current setup for a trusted tester; rotate keys only if the APK or zip leaks. No code task |
 | R8 | Shrink only, `-dontobfuscate` (crash-handler traces must stay readable) |
+| Holiday route type (T0 outcome) | The original assumption (`holidays=1` marks nightly routes) was **disproved** by the live feed: overnight rows exist under both flag values. The rule is now: a route is nightly (suspended only on the 3 major holidays) if `holidays=1` **or** it starts before 6 am; anything else uses the full holiday list. Chosen because each half can only remove suspensions (fail toward warning). Re-verified on raw data in `docs/investigations/F1-raw-data-findings.md`. |
+| Stack of branches | T1–T9 plus the location-permission fix are stacked, each on the previous (`location-permission-prompt` is the tip). Fix forward with commits on top instead of rebasing. |
 
 ## T0. `holidays` flag check (Z does this, not you)
 
