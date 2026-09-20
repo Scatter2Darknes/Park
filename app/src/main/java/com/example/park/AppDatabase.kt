@@ -159,6 +159,9 @@ suspend fun saveParkedState(
     // but if this spot isn't being swept the old one has to go). This function is also the path the
     // Bluetooth auto-park takes, so the notice covers that too.
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
+    // A stale Bluetooth "Did X just park?" prompt from an earlier spot is replaced by this new park.
+    // (The Bluetooth flows post their own notice after saveParkedState returns, so this can't erase it.)
+    NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT))
     val sweepEnd = NextSweepCalculator.sweepInProgressEndDateTime(segment, parkedAt)
     if (sweepEnd != null) {
         val endMillis = sweepEnd.atZone(SF_ZONE).toInstant().toEpochMilli()

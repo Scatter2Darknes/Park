@@ -30,9 +30,6 @@ import kotlin.coroutines.resume
 // where the flow succeeds or breaks down when diagnosing "why didn't this fire".
 const val BLUETOOTH_AUTO_DETECT_LOG_TAG = "ParkBluetooth"
 
-// Offset so these notifications' IDs never collide with the parking-reminder IDs
-// (carId and carId + 1,000,000) used elsewhere.
-private const val AUTO_DETECT_NOTIFICATION_ID_OFFSET = 2_000_000
 
 // How long the "Did X just park?" prompt for an AMBIGUOUS match stays up before removing itself.
 // A constant rather than a setting: the best guess is already saved, so this is only a nudge to
@@ -430,7 +427,7 @@ fun showAutoDetectNotification(
             putExtra("autoDetectLng", autoDetectPoint.lng)
         }
     }
-    val notificationId = car.id.toInt() + AUTO_DETECT_NOTIFICATION_ID_OFFSET
+    val notificationId = NotificationIds.forCar(car.id, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT)
     val pendingIntent = PendingIntent.getActivity(
         context,
         notificationId,

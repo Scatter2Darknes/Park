@@ -16,9 +16,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-// Distinct offset so these notifications never collide with reminder IDs (carId,
-// carId+1,000,000) or Bluetooth auto-detect-park IDs (carId+2,000,000).
-private const val AUTO_UNPARK_NOTIFICATION_ID_OFFSET = 3_000_000
 
 /**
  * Listens for Bluetooth ACL reconnects and, if the reconnected device is linked to a car
@@ -145,7 +142,7 @@ private fun showUnparkedNotification(context: Context, car: Car, timeoutAfterMil
     val launchIntent = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
-    val notificationId = car.id.toInt() + AUTO_UNPARK_NOTIFICATION_ID_OFFSET
+    val notificationId = NotificationIds.forCar(car.id, NotificationIds.Purpose.BLUETOOTH_AUTO_UNPARK)
     val pendingIntent = PendingIntent.getActivity(
         context, notificationId, launchIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

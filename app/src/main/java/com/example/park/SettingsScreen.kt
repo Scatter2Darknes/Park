@@ -1475,16 +1475,16 @@ private fun VerticalScrollbar(scrollState: ScrollState, modifier: Modifier = Mod
     }
 }
 
-// Fixed IDs for the test buttons, well outside the range real car IDs would ever produce.
-private const val TEST_NORMAL_NOTIFICATION_ID = 999_001
-private const val TEST_URGENT_NOTIFICATION_ID = 999_002
-private const val TEST_RPP_NORMAL_NOTIFICATION_ID = 999_003
-private const val TEST_RPP_URGENT_NOTIFICATION_ID = 999_004
+// Fixed IDs for the test buttons — all defined in NotificationIds, in the range reserved above any real car id.
+private const val TEST_NORMAL_NOTIFICATION_ID = NotificationIds.TEST_NORMAL
+private const val TEST_URGENT_NOTIFICATION_ID = NotificationIds.TEST_URGENT
+private const val TEST_RPP_NORMAL_NOTIFICATION_ID = NotificationIds.TEST_RPP_NORMAL
+private const val TEST_RPP_URGENT_NOTIFICATION_ID = NotificationIds.TEST_RPP_URGENT
 // Positive, not -1 — still just as impossible for a real car to collide with (Room's
 // autoincrement starts at 1 and would need roughly a billion cars first), but a positive
 // value round-trips more predictably through the "reminderCarId" content-intent extra than
 // a negative sentinel would.
-private const val TEST_NOTIFICATION_CAR_ID = 999_999_999L
+private const val TEST_NOTIFICATION_CAR_ID = NotificationIds.TEST_CAR_ID
 
 // 10 choices for 4 slots, so there's always genuine choice beyond just permuting the
 // original 4 — includes the 4 defaults plus 6 more, all visually distinct from each other.

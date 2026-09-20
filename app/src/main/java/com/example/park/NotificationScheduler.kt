@@ -11,28 +11,17 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 
-// Every kind's alarms/notifications for a car reuse the car's id shifted by a kind-specific
-// offset, keeping all four request codes / notification IDs trivially unique (and stable
-// across reschedules, so FLAG_UPDATE_CURRENT replaces the right one) without a second ID
-// scheme to track. RPP's offsets are far enough from URGENT_ID_OFFSET that a car with both a
-// sweep reminder and an RPP reminder scheduled at once can never collide.
-private const val URGENT_ID_OFFSET = 1_000_000
-private const val RPP_NORMAL_ID_OFFSET = 2_000_000
-private const val RPP_URGENT_ID_OFFSET = 3_000_000
-// Roll-forward alarms (see scheduleRollForward) and the one-off "sweeping in progress" notice.
-// NOT reused from anywhere else: BluetoothDisconnectReceiver/BluetoothConnectReceiver already use
-// 2_000_000 and 3_000_000 for their own notification ids, so these start above both.
-private const val ROLL_SWEEP_ID_OFFSET = 4_000_000
-private const val ROLL_RPP_ID_OFFSET = 5_000_000
-private const val SWEEP_ACTIVE_ID_OFFSET = 6_000_000
-
-fun reminderRequestCode(carId: Long, kind: ReminderKind): Int = carId.toInt() + when (kind) {
-    ReminderKind.NORMAL -> 0
-    ReminderKind.URGENT -> URGENT_ID_OFFSET
-    ReminderKind.RPP_NORMAL -> RPP_NORMAL_ID_OFFSET
-    ReminderKind.RPP_URGENT -> RPP_URGENT_ID_OFFSET
-    ReminderKind.SWEEP_ACTIVE -> SWEEP_ACTIVE_ID_OFFSET
+// All ids live in NotificationIds (one range per purpose, with a guard on the car id and a test that
+// no two purposes can collide). These two functions just map a reminder kind onto its purpose.
+private fun ReminderKind.idPurpose(): NotificationIds.Purpose = when (this) {
+    ReminderKind.NORMAL -> NotificationIds.Purpose.REMINDER_NORMAL
+    ReminderKind.URGENT -> NotificationIds.Purpose.REMINDER_URGENT
+    ReminderKind.RPP_NORMAL -> NotificationIds.Purpose.RPP_NORMAL
+    ReminderKind.RPP_URGENT -> NotificationIds.Purpose.RPP_URGENT
+    ReminderKind.SWEEP_ACTIVE -> NotificationIds.Purpose.SWEEP_ACTIVE
 }
+
+fun reminderRequestCode(carId: Long, kind: ReminderKind): Int = NotificationIds.forCar(carId, kind.idPurpose())
 
 fun reminderNotificationId(carId: Long, kind: ReminderKind): Int = reminderRequestCode(carId, kind)
 
@@ -249,10 +238,10 @@ private suspend fun scheduleOrFireImmediately(
  */
 enum class RollForwardKind { SWEEP, RPP }
 
-private fun rollForwardRequestCode(carId: Long, kind: RollForwardKind): Int = carId.toInt() + when (kind) {
-    RollForwardKind.SWEEP -> ROLL_SWEEP_ID_OFFSET
-    RollForwardKind.RPP -> ROLL_RPP_ID_OFFSET
-}
+private fun rollForwardRequestCode(carId: Long, kind: RollForwardKind): Int = NotificationIds.forCar(carId, when (kind) {
+    RollForwardKind.SWEEP -> NotificationIds.Purpose.ROLL_FORWARD_SWEEP
+    RollForwardKind.RPP -> NotificationIds.Purpose.ROLL_FORWARD_RPP
+})
 
 private fun cancelRollForward(context: Context, carId: Long, kind: RollForwardKind) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
@@ -454,6 +443,11 @@ fun cancelParkingReminder(context: Context, carId: Long) {
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.NORMAL))
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.URGENT))
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
+    // The Bluetooth "Did X just park?" / "X unparked" notices belong to this car's parked state too;
+    // left behind after an unpark or a car delete they'd point at a spot that no longer exists.
+    // (The unpark path posts its own fresh notice AFTER calling this, so it isn't affected.)
+    NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT))
+    NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_UNPARK))
     cancelRppReminder(context, carId)
 }
 

@@ -55,6 +55,13 @@ class ParkingReminderReceiver : BroadcastReceiver() {
             ?.let { runCatching { ReminderKind.valueOf(it) }.getOrNull() }
             ?: ReminderKind.NORMAL
 
+        // -1 is getLongExtra's "missing" default. NotificationIds.forCar rejects it (an id outside
+        // its range would collide with another purpose), so bail out here rather than crash.
+        if (carId < 0) {
+            Log.w("Park", "ParkingReminderReceiver: no carId in the intent — ignoring")
+            return
+        }
+
         val (title, text) = buildReminderContent(carName, corridor, nextSweepAtMillis, kind)
 
         // Posted synchronously, before any database work, so the reminder itself never depends
