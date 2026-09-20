@@ -130,11 +130,11 @@ suspend fun performAutoDetectUnpark(context: Context, car: Car) {
 
     unsubscribeParking(context, car.id) // cancels reminders, clears parked_state, updates the widget
     BluetoothConnectionCenter.notifyParkedStateChanged()
-    showUnparkedNotification(context, car)
+    showUnparkedNotification(context, car, SettingsRepository(context).informationalNotificationTimeoutMillis())
     Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "[connect] performAutoDetectUnpark: cleared parked state, notification sent")
 }
 
-private fun showUnparkedNotification(context: Context, car: Car) {
+private fun showUnparkedNotification(context: Context, car: Car, timeoutAfterMillis: Long?) {
     // Purely informational (no action needed, unlike the AMBIGUOUS/NO_MATCH park case) — if
     // the map screen is visible, its own live toast already said this, so skip the duplicate.
     if (MapScreenVisibility.isVisible.value) {
@@ -151,14 +151,18 @@ private fun showUnparkedNotification(context: Context, car: Car) {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    val notification = NotificationCompat.Builder(context, NotificationHelper.CHANNEL_ID_NORMAL)
+    // Quiet "Parking status" channel: this used to set PRIORITY_LOW on the loud reminders
+    // channel, but on API 26+ the channel's importance wins over the notification's priority,
+    // so it still heads-up popped. It also removes itself after the Settings-chosen timeout.
+    val builder = NotificationCompat.Builder(context, NotificationHelper.CHANNEL_ID_STATUS)
         .setSmallIcon(android.R.drawable.ic_dialog_alert)
         .setContentTitle("${car.name} unparked")
         .setContentText("Reconnected to its linked Bluetooth \u2014 cleared the saved parking spot.")
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setAutoCancel(true)
         .setContentIntent(pendingIntent)
-        .build()
+    if (timeoutAfterMillis != null && timeoutAfterMillis > 0) builder.setTimeoutAfter(timeoutAfterMillis)
+    val notification = builder.build()
 
     if (ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.POST_NOTIFICATIONS

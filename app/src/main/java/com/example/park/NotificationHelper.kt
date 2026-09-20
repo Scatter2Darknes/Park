@@ -20,6 +20,10 @@ enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE }
 object NotificationHelper {
     const val CHANNEL_ID_NORMAL = "parking_reminders"
     const val CHANNEL_ID_URGENT = "parking_urgent_reminders"
+    // Quiet, low-importance channel for informational notices (auto-park confirmed, unparked) that
+    // need no action and shouldn't heads-up. A channel's importance can't be lowered once created,
+    // so this is a NEW id rather than a change to "parking_reminders"; the old channels are untouched.
+    const val CHANNEL_ID_STATUS = "parking_status"
 
     fun createChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -42,6 +46,15 @@ object NotificationHelper {
 
         manager.createNotificationChannel(normalChannel)
         manager.createNotificationChannel(urgentChannel)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID_STATUS,
+                "Parking status",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Quiet updates like \"parked automatically\" and \"unparked\" — no sound or pop-up"
+            }
+        )
     }
 
     /**

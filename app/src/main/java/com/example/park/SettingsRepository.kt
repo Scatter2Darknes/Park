@@ -20,6 +20,7 @@ object SettingsKeys {
     val NOTIFICATION_OFFSET_MINUTES = intPreferencesKey("notification_offset_minutes")
     val URGENT_REMINDER_ENABLED = booleanPreferencesKey("urgent_reminder_enabled")
     val URGENT_OFFSET_MINUTES = intPreferencesKey("urgent_offset_minutes")
+    val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = intPreferencesKey("informational_notification_timeout_minutes") // 0 = never
     val SOON_THRESHOLD_DAYS = floatPreferencesKey("soon_threshold_days")
     val IMMINENT_THRESHOLD_DAYS = floatPreferencesKey("imminent_threshold_days")
     val REFRESH_INTERVAL_HOURS = intPreferencesKey("refresh_interval_hours")
@@ -65,6 +66,7 @@ object SettingsDefaults {
     const val NOTIFICATION_OFFSET_MINUTES = 120 // 2h — matches the old hardcoded offset
     const val URGENT_REMINDER_ENABLED = true
     const val URGENT_OFFSET_MINUTES = 15
+    const val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = 5
     const val SOON_THRESHOLD_DAYS = 3f
     const val IMMINENT_THRESHOLD_DAYS = 2f
     const val REFRESH_INTERVAL_HOURS = 24
@@ -126,6 +128,16 @@ val NOTIFICATION_OFFSET_PRESETS: List<Pair<Int, String>> = listOf(
     2880 to "2 days before",
     4320 to "3 days before",
     10080 to "1 week before"
+)
+
+/** How long an informational Bluetooth notification (the confident auto-park notice and the
+ *  "unparked" notice) stays before removing itself. 0 means never. Sweep/RPP reminders, the
+ *  ambiguous "Did X just park?" prompt, and the no-match prompt are NOT governed by this. */
+val INFORMATIONAL_TIMEOUT_PRESETS: List<Pair<Int, String>> = listOf(
+    1 to "1 minute",
+    5 to "5 minutes",
+    30 to "30 minutes",
+    0 to "Never"
 )
 
 /** Presets for the urgent tier. Originally capped at 1 hour on the assumption this only
@@ -195,6 +207,19 @@ class SettingsRepository(private val context: Context) {
     suspend fun setUrgentOffsetMinutes(value: Int) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.URGENT_OFFSET_MINUTES] = value }
     }
+
+    val informationalNotificationTimeoutMinutes: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES] ?: SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES
+    }
+
+    suspend fun setInformationalNotificationTimeoutMinutes(value: Int) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES] = value }
+    }
+
+    /** The timeout above as milliseconds for NotificationCompat's setTimeoutAfter, or null when
+     *  it's set to Never (setTimeoutAfter must only be applied for a value greater than 0). */
+    suspend fun informationalNotificationTimeoutMillis(): Long? =
+        informationalNotificationTimeoutMinutes.first().takeIf { it > 0 }?.let { it * 60_000L }
 
     val drivingModeZoom: Flow<Float> = context.dataStore.data.map { prefs ->
         prefs[SettingsKeys.DRIVING_MODE_ZOOM] ?: SettingsDefaults.DRIVING_MODE_ZOOM

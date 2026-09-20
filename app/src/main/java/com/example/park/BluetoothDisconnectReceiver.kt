@@ -34,6 +34,11 @@ const val BLUETOOTH_AUTO_DETECT_LOG_TAG = "ParkBluetooth"
 // (carId and carId + 1,000,000) used elsewhere.
 private const val AUTO_DETECT_NOTIFICATION_ID_OFFSET = 2_000_000
 
+// How long the "Did X just park?" prompt for an AMBIGUOUS match stays up before removing itself.
+// A constant rather than a setting: the best guess is already saved, so this is only a nudge to
+// confirm or correct, and 4 hours is long enough to catch someone before their next drive.
+private const val AMBIGUOUS_MATCH_TIMEOUT_MS = 4 * 60 * 60 * 1000L
+
 /**
  * Enables or disables BluetoothConnectReceiver/BluetoothDisconnectReceiver at the
  * PackageManager level — not just an internal flag these receivers check on their own.
@@ -334,7 +339,9 @@ suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
                 title = "Parked ${car.name} automatically",
                 text = "Detected near ${segment.corridor}. Tap to view or correct.",
                 centerPoint = point,
-                suppressIfMapVisible = true
+                suppressIfMapVisible = true,
+                informational = true, // needs no action: quiet channel, and it removes itself
+                timeoutAfterMillis = SettingsRepository(context).informationalNotificationTimeoutMillis()
             )
             Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "performAutoDetectPark: saved to ${segment.corridor}, notification sent")
             AutoParkResult.Subscribed(segment.corridor)
@@ -370,7 +377,12 @@ suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
                 else
                     "Couldn't pin down the exact spot \u2014 tap to confirm.",
                 autoDetectCarId = car.id,
-                autoDetectPoint = point
+                autoDetectPoint = point,
+                // Actionable, so it stays on the loud channel. The ambiguous case already saved a
+                // best guess, so this prompt is only a "confirm or correct" nudge that can lapse
+                // after a while; the no-match case never times out — this notification is the only
+                // way into the manual confirm flow for a spot that wasn't saved at all.
+                timeoutAfterMillis = if (confidence == MatchConfidence.AMBIGUOUS) AMBIGUOUS_MATCH_TIMEOUT_MS else null
             )
             Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "performAutoDetectPark: confidence=$confidence, notification sent" +
                     (if (confidence == MatchConfidence.AMBIGUOUS) " (best-guess subscription also saved)" else ""))
@@ -387,7 +399,14 @@ fun showAutoDetectNotification(
     centerPoint: LatLng? = null,
     autoDetectCarId: Long? = null,
     autoDetectPoint: LatLng? = null,
-    suppressIfMapVisible: Boolean = false
+    suppressIfMapVisible: Boolean = false,
+    // true = purely informational (the confident auto-park notice): posted on the quiet
+    // "Parking status" channel. false = actionable (the ambiguous / no-match "Did X just park?"
+    // prompts): stays on the loud reminders channel so it still heads-up.
+    informational: Boolean = false,
+    // Removes the notification by itself after this long (NotificationCompat's setTimeoutAfter).
+    // null or <= 0 = never. Reminders never pass one.
+    timeoutAfterMillis: Long? = null
 ) {
     // Only the purely-informational CONFIDENT auto-park case opts into this — the
     // AMBIGUOUS/NO_MATCH "Did X just park?" notification is the only way to open the manual
@@ -419,14 +438,20 @@ fun showAutoDetectNotification(
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    val notification = NotificationCompat.Builder(context, NotificationHelper.CHANNEL_ID_NORMAL)
+    val builder = NotificationCompat.Builder(
+        context,
+        if (informational) NotificationHelper.CHANNEL_ID_STATUS else NotificationHelper.CHANNEL_ID_NORMAL
+    )
         .setSmallIcon(android.R.drawable.ic_dialog_alert)
         .setContentTitle(title)
         .setContentText(text)
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        // On API 26+ the channel's importance is what actually decides heads-up vs. quiet; this
+        // priority only matters below API 26 (this app's minSdk is 29), but it's kept consistent.
+        .setPriority(if (informational) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
         .setAutoCancel(true)
         .setContentIntent(pendingIntent)
-        .build()
+    if (timeoutAfterMillis != null && timeoutAfterMillis > 0) builder.setTimeoutAfter(timeoutAfterMillis)
+    val notification = builder.build()
 
     if (ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.POST_NOTIFICATIONS

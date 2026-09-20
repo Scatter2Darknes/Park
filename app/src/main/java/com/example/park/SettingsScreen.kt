@@ -117,6 +117,8 @@ fun SettingsScreen(
     val syncStatusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
     var offsetMenuExpanded by remember { mutableStateOf(false) }
     var urgentOffsetMenuExpanded by remember { mutableStateOf(false) }
+    var informationalTimeoutMinutes by remember { mutableStateOf(SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES) }
+    var informationalTimeoutMenuExpanded by remember { mutableStateOf(false) }
 
     suspend fun reloadAllSettings() {
         alwaysAskCar = settings.alwaysAskCar.first()
@@ -124,6 +126,7 @@ fun SettingsScreen(
         notificationOffsetMinutes = settings.notificationOffsetMinutes.first()
         urgentReminderEnabled = settings.urgentReminderEnabled.first()
         urgentOffsetMinutes = settings.urgentOffsetMinutes.first()
+        informationalTimeoutMinutes = settings.informationalNotificationTimeoutMinutes.first()
         soonThresholdDays = settings.soonThresholdDays.first()
         imminentThresholdDays = settings.imminentThresholdDays.first()
         statusColors = settings.sweepStatusColorsSnapshot()
@@ -1029,6 +1032,45 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            Spacer(Modifier.height(8.dp))
+            val currentTimeoutLabel = INFORMATIONAL_TIMEOUT_PRESETS
+                .firstOrNull { it.first == informationalTimeoutMinutes }?.second
+                ?: "$informationalTimeoutMinutes minutes"
+            ExposedDropdownMenuBox(
+                expanded = informationalTimeoutMenuExpanded,
+                onExpandedChange = { informationalTimeoutMenuExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = currentTimeoutLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Clear \"parked\" / \"unparked\" notices after") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = informationalTimeoutMenuExpanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = informationalTimeoutMenuExpanded,
+                    onDismissRequest = { informationalTimeoutMenuExpanded = false }
+                ) {
+                    INFORMATIONAL_TIMEOUT_PRESETS.forEach { (minutes, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                informationalTimeoutMinutes = minutes
+                                informationalTimeoutMenuExpanded = false
+                                scope.launch { settings.setInformationalNotificationTimeoutMinutes(minutes) }
+                            }
+                        )
+                    }
+                }
+            }
+            DescriptionToggle(
+                "How long the quiet \"parked automatically\" and \"unparked\" notifications stay " +
+                        "before removing themselves. Only these two — street-cleaning and time-limit " +
+                        "reminders never time out, and neither does the \"Did you just park?\" prompt when " +
+                        "the spot couldn't be pinned down at all (an unsure guess lapses after 4 hours)."
+            )
         }
 
         Spacer(Modifier.height(16.dp))
