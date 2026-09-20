@@ -119,12 +119,46 @@ fun MapScreen(
                     == PackageManager.PERMISSION_GRANTED
         )
     }
+    // Android 12+ lets the person grant only "Approximate" (COARSE) location. The map needs the
+    // precise GPS fix, so that counts as not-granted here — tracked separately only so the prompt
+    // can say so, instead of telling someone who just tapped "Allow" that location is missing.
+    var hasApproximateLocationOnly by remember {
+        mutableStateOf(
+            !hasLocationPermission &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    fun refreshLocationPermission() {
+        hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        hasApproximateLocationOnly = !hasLocationPermission &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> hasLocationPermission = granted }
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { refreshLocationPermission() }
+    val requestLocationPermission = {
+        permissionLauncher.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        )
+    }
 
     LaunchedEffect(Unit) {
-        if (!hasLocationPermission) permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (!hasLocationPermission) requestLocationPermission()
+    }
+
+    // Re-check whenever the screen comes back to the foreground: the person may have just switched
+    // location on in the system's app-settings page (opened by the prompt below), which doesn't
+    // report back through the launcher above.
+    val locationLifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(locationLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshLocationPermission()
+        }
+        locationLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { locationLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // POST_NOTIFICATIONS is no longer auto-requested here at first launch — deferred to
@@ -1253,9 +1287,19 @@ fun MapScreen(
                     Spacer(Modifier.height(8.dp))
                 }
             } // closes the BT-chip/ambiguity/parked-banner Column opened above
-        } else {
-            Text("Location permission is needed to show the map.", modifier = Modifier.align(Alignment.Center))
+        } else if (!hasLocationPermission) {
+            // Was a single line of text with nothing else on screen — the Settings gear and every
+            // button lived inside the branch above — which read as a frozen, black screen.
+            LocationPermissionRequired(
+                approximateOnly = hasApproximateLocationOnly,
+                onRequestPermission = { requestLocationPermission() },
+                // Reuses the existing helper: it just opens this app's page in system Settings.
+                onOpenAppSettings = { openAppSettingsForBackgroundLocation(context) },
+                onOpenSettingsScreen = onNavigateToSettings
+            )
         }
+        // else: permission is granted but the map settings are still loading (a few milliseconds).
+        // Nothing to show yet — this branch used to flash "Location permission is needed" here.
 
         // Everything below was previously placed AFTER this Box's closing brace, which meant
         // `Modifier.align(...)` inside the DroppingPin banner had no BoxScope receiver to
