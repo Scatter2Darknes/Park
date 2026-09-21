@@ -1,0 +1,78 @@
+# Continuous integration: on every push and pull request, run the JVM unit tests, build the debug APK, and run the
+# Python tests for the scripts/ helpers.
+#
+# No secrets are used and none must be added. The two API-key asset files (app/src/main/assets/stadia_api_key.txt and
+# datasf_app_token.txt) are gitignored and ApiKeys falls back to blank when they are missing, so the app builds
+# without them; this workflow proves it on every run. (scripts/tests/test_ci_workflow.py fails if a secret is added.)
+#
+# The repository is private. Artifacts are limited to the unit-test reports, only when a run fails.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Unit tests and debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # AGP 9 needs JDK 17 or newer; 21 is what the project is built and tested with locally.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Installs the Android command-line tools and accepts the SDK licences, so Gradle can download the compileSdk platform.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Restores and saves Gradle's caches between runs.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # gradlew was committed without its executable bit on Windows; this makes CI robust even if that ever regresses.
+      - name: Make the Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Unit tests and debug build
+        run: ./gradlew testDebugUnitTest assembleDebug --console=plain
+
+      # Only the test reports (never anything from the device or from backups/logs), and only when something failed.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/
+          retention-days: 7
+
+  scripts:
+    name: Script tests (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Standard library only - nothing to install. These need no device.
+      - name: Run the script tests
+        run: python -m unittest discover -s scripts/tests -v

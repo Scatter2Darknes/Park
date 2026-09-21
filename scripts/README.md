@@ -109,3 +109,9 @@ There is deliberately no restore script, because restoring **writes into the app
 4. Remove the temp copy, then open the app.
 
 Restoring a `-wal` file on its own is not enough to reconstruct a database; back up (and restore) the main file together with its `-wal`.
+
+## CI (A7)
+
+`.github/workflows/ci.yml` runs on every push and pull request: the JVM unit tests and the debug build (`./gradlew testDebugUnitTest assembleDebug`, JDK 21), and these Python tests as a second job. It uses **no secrets** (the two API-key files are gitignored and the app builds without them), has read-only permissions, and uploads only the unit-test reports, and only when a run fails. `.github/workflows/instrumented.yml` runs the Room migration tests on a throw-away emulator, **manually only** (Actions tab -> Instrumented tests -> Run workflow). `scripts/tests/test_ci_workflow.py` fails if a workflow ever references a secret or key, gains write permissions, or uploads anything but test reports.
+
+Checked locally: the workflow's commands pass in a fresh clone with no `local.properties` and no key files, and go red when a unit test is deliberately broken. A green check on GitHub itself can only be confirmed by pushing.
