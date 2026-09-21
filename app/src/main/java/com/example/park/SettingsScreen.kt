@@ -101,6 +101,7 @@ fun SettingsScreen(
     var batteryOptimizationExempt by remember { mutableStateOf(false) }
     var hasBackgroundLocation by remember { mutableStateOf(false) }
     var hasExactAlarmPermission by remember { mutableStateOf(canScheduleExactAlarmsCompat(context)) }
+    var reminderHealth by remember { mutableStateOf(currentReminderHealth(context)) }
     var hasNotificationPermission by remember {
         mutableStateOf(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -176,6 +177,7 @@ fun SettingsScreen(
                 batteryOptimizationExempt = isIgnoringBatteryOptimizations(context)
                 hasBackgroundLocation = hasBackgroundLocationPermission(context)
                 hasExactAlarmPermission = canScheduleExactAlarmsCompat(context)
+                reminderHealth = currentReminderHealth(context)
                 hasNotificationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             }
@@ -404,6 +406,48 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // Can Park's reminders actually be SHOWN? Alarms can be perfect and Android still drops every
+        // notification if they're blocked — total silence, so this sits above the exact-alarm row.
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
+        SectionLabel("Notifications")
+        DescriptionToggle(
+            "Park's reminders are notifications. If Android is blocking them — for the whole app or " +
+                    "just the reminders channel — the alarms still go off but nothing is shown, so a " +
+                    "parked car gets no reminder at all. Android can't turn them on from inside the " +
+                    "app; the button opens the system page where you do."
+        )
+        Spacer(Modifier.height(8.dp))
+        if (reminderHealth.isHealthy) {
+            StatusOkRow("Notifications: Allowed")
+            if (reminderHealth.statusChannelBlocked) {
+                Spacer(Modifier.height(8.dp))
+                DescriptionToggle(
+                    "The quiet \"${reminderChannelName(NotificationHelper.CHANNEL_ID_STATUS)}\" channel is off, " +
+                            "so \"parked automatically\" style notices won't show. Reminders are not affected."
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { openAppNotificationSettings(context) }) {
+                Text("Open Notification Settings")
+            }
+        } else {
+            Text(
+                "Notifications: Blocked — " + reminderHealthMessage(reminderHealth),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { openReminderHealthSettings(context, reminderHealth) }) {
+                Text(
+                    if (reminderHealth.health == ReminderHealth.REMINDER_CHANNEL_BLOCKED)
+                        "Open ${reminderChannelName(reminderHealth.blockedChannelId)} Settings"
+                    else "Allow Notifications"
+                )
             }
         }
 

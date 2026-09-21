@@ -161,24 +161,24 @@ object NotificationHelper {
         val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.POST_NOTIFICATIONS
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (hasPermission) {
-            NotificationManagerCompat.from(context).notify(notificationId, notification)
-            android.util.Log.d("Park", "showReminder: notify() called for notificationId=$notificationId")
-            return true
-        } else {
-            // The most likely explanation for "the test button does nothing" — this check
-            // fails completely silently otherwise, with no log, no toast, no exception.
-            // NotificationManagerCompat.areNotificationsEnabled() additionally catches the
-            // "permission granted but the person (or Android) disabled this specific
-            // notification channel" case, which the permission check alone can't see.
+        // notify() silently does nothing when Android is blocking this app's (or this channel's)
+        // notifications, so say so in the log — capture_logs.py counts this line — and report
+        // "not posted" so the delivery marker isn't recorded and a later re-arm can try again
+        // once the person has turned notifications back on.
+        val appEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        val channelOff = channelImportance == NotificationManagerCompat.IMPORTANCE_NONE
+        if (!hasPermission || !appEnabled || channelOff) {
+            android.util.Log.w("Park", "notifications blocked — reminder not shown")
             android.util.Log.w(
                 "Park",
-                "showReminder: notificationId=$notificationId NOT shown \u2014 " +
-                        "POST_NOTIFICATIONS not granted (areNotificationsEnabled=" +
-                        "${NotificationManagerCompat.from(context).areNotificationsEnabled()})"
+                "showReminder: notificationId=$notificationId NOT shown — permissionGranted=$hasPermission " +
+                        "areNotificationsEnabled=$appEnabled channel=$channelId importance=$channelImportance"
             )
             return false
         }
+        NotificationManagerCompat.from(context).notify(notificationId, notification)
+        android.util.Log.d("Park", "showReminder: notify() called for notificationId=$notificationId")
+        return true
     }
 
     fun cancel(context: Context, notificationId: Int) {

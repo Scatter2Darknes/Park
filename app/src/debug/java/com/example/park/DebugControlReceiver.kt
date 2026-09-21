@@ -105,6 +105,15 @@ class DebugControlReceiver : BroadcastReceiver() {
         Log.i(TAG, "DUMP_STATE begin: now=${fmt(nowMillis)} exactAlarmsAllowed=${canScheduleExactAlarmsCompat(context)} " +
                 "reminderOffsetMin=${offsetMillis / 60_000} urgentOffsetMin=${urgentMillis?.let { it / 60_000 }}")
 
+        // Can the reminders be SHOWN? (alarms can be perfect and Android still drops the notifications)
+        val notifManager = androidx.core.app.NotificationManagerCompat.from(context)
+        fun importance(channelId: String) = notifManager.getNotificationChannelCompat(channelId)?.importance
+        Log.i(TAG, "notifications: notificationsEnabled=${notifManager.areNotificationsEnabled()} " +
+                "remindersChannelImportance=${importance(NotificationHelper.CHANNEL_ID_NORMAL)} " +
+                "urgentChannelImportance=${importance(NotificationHelper.CHANNEL_ID_URGENT)} " +
+                "statusChannelImportance=${importance(NotificationHelper.CHANNEL_ID_STATUS)} " +
+                "reminderHealth=${currentReminderHealth(context).health}")
+
         val cars = db.carDao().getAll()
         Log.i(TAG, "cars: " + cars.joinToString("; ") { "id=${it.id} name='${it.name}' permitZones=${it.permitZoneLetters}" })
 

@@ -173,10 +173,18 @@ fun MapScreen(
     // row plus the persistent warning banner below, both of which only open that page on a tap.
     // Re-read on every ON_RESUME so the banner disappears as soon as they grant it and come back.
     var exactAlarmsAllowed by remember { mutableStateOf(canScheduleExactAlarmsCompat(context)) }
+    // Same idea for notifications: alarms can fire perfectly and Android still drops every notification
+    // if they're blocked (app-wide or just the reminders channel), which is total silence — worse than
+    // late reminders. Re-read on ON_RESUME (not polled) so the banner clears right after the person
+    // allows them in system settings and comes back.
+    var reminderHealth by remember { mutableStateOf(currentReminderHealth(context)) }
     val exactAlarmLifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(exactAlarmLifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) exactAlarmsAllowed = canScheduleExactAlarmsCompat(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                exactAlarmsAllowed = canScheduleExactAlarmsCompat(context)
+                reminderHealth = currentReminderHealth(context)
+            }
         }
         exactAlarmLifecycleOwner.lifecycle.addObserver(observer)
         onDispose { exactAlarmLifecycleOwner.lifecycle.removeObserver(observer) }
@@ -1041,6 +1049,30 @@ fun MapScreen(
                 // inexact alarms that Android may deliver minutes late.
                 val hasCarWithReminders = activeParkedCars.any {
                     it.parkedState?.nextSweepAtMillis != null || it.rppDeadline != null
+                }
+                // Notifications-blocked banner sits ABOVE the exact-alarm one: no visible reminders at
+                // all is more severe than late ones. Both can show at once.
+                if (!reminderHealth.isHealthy && hasCarWithReminders) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp)
+                        ) {
+                            Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                reminderHealthMessage(reminderHealth),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            TextButton(onClick = { openReminderHealthSettings(context, reminderHealth) }) { Text("Fix") }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 if (exactAlarmPermissionApplies() && !exactAlarmsAllowed && hasCarWithReminders) {
                     Surface(
