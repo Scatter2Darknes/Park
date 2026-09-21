@@ -19,7 +19,15 @@ private const val RPP_FEATURE_SERVICE_URL =
 // RPPAREA1 is " " (a literal space), not blank/null, on rows with no RPP regulation — matches
 // the live feed's own convention, confirmed by querying it directly.
 private const val RPP_WHERE_CLAUSE = "RPPAREA1 IS NOT NULL AND RPPAREA1 <> ' '"
-private const val RPP_OUT_FIELDS = "OBJECTID,DAYS,HRS_BEGIN,HRS_END,HRLIMIT,RPPAREA1,RPPAREA2,RPPAREA3"
+private const val RPP_OUT_FIELDS = "OBJECTID,REGULATION,DAYS,HRS_BEGIN,HRS_END,HRLIMIT,RPPAREA1,RPPAREA2,RPPAREA3"
+
+/**
+ * Assumed limit, in hours, for a "Time Limited" RPP row whose HRLIMIT is missing. The live feed has 5 such
+ * rows out of ~6,500 (zones S, D, D, Q, U — checked 2026-09-20); 86% of all rows are 2 hours, so 2 is the
+ * most likely value, and for a ticket-avoidance app warning on a guess beats staying silent. Rows built this
+ * way are flagged `limitAssumed` so reminders can say so.
+ */
+const val RPP_ASSUMED_LIMIT_HOURS = 2f
 
 suspend fun fetchRppPage(limit: Int, offset: Int): String = withContext(Dispatchers.IO) {
     val query = "where=${URLEncoder.encode(RPP_WHERE_CLAUSE, "UTF-8")}" +
@@ -120,9 +128,13 @@ fun parseRppRegulations(json: String): List<RppZoneRegulation> {
 
         val zoneLetters = listOf("RPPAREA1", "RPPAREA2", "RPPAREA3")
             .mapNotNull { key -> attrs.optCleanString(key) }
+            // Real zones are letters only (A-Z, AA-HH, HV). The feed's "no parking any time" rows carry a
+            // "0" in RPPAREA1, which slips past the query's `<> ' '` filter and would show up as a zone "0"
+            // in the permit picker; drop anything that isn't letters.
+            .filter { zone -> zone.all { it.isLetter() } }
             .distinct()
             .joinToString(",")
-        if (zoneLetters.isEmpty()) continue // defensive — the WHERE clause should already exclude these
+        if (zoneLetters.isEmpty()) continue // junk rows (zone "0") and anything the WHERE clause missed
 
         val firstPath = feature.optJSONObject("geometry")?.optJSONArray("paths")?.optJSONArray(0)
         val points = mutableListOf<LatLng>()
@@ -135,6 +147,13 @@ fun parseRppRegulations(json: String): List<RppZoneRegulation> {
         val centroidLat = if (points.isNotEmpty()) points.map { it.lat }.average() else 0.0
         val centroidLng = if (points.isNotEmpty()) points.map { it.lng }.average() else 0.0
 
+        // A missing / non-positive limit: assume RPP_ASSUMED_LIMIT_HOURS for "Time Limited" rows (the
+        // regulation type says a limit exists, the value just isn't filled in); leave every other type
+        // (metered "Paid + Permit", 72-hour "Pay or Permit", ...) at 0 = no deadline.
+        val postedLimit = if (attrs.isNull("HRLIMIT")) 0f else attrs.optDouble("HRLIMIT", 0.0).toFloat()
+        val isTimeLimited = attrs.optCleanString("REGULATION")?.equals("Time Limited", ignoreCase = true) == true
+        val assumeLimit = postedLimit <= 0f && isTimeLimited
+
         result.add(
             RppZoneRegulation(
                 objectId = attrs.optInt("OBJECTID").toString(),
@@ -142,7 +161,8 @@ fun parseRppRegulations(json: String): List<RppZoneRegulation> {
                 days = attrs.optCleanString("DAYS") ?: "",
                 hrsBegin = attrs.optInt("HRS_BEGIN"),
                 hrsEnd = attrs.optInt("HRS_END"),
-                hrLimit = attrs.optDouble("HRLIMIT", 0.0).toFloat(),
+                hrLimit = if (assumeLimit) RPP_ASSUMED_LIMIT_HOURS else postedLimit,
+                limitAssumed = if (assumeLimit) true else null,
                 points = points,
                 centroidLat = centroidLat,
                 centroidLng = centroidLng

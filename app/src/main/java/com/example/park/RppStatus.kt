@@ -75,7 +75,9 @@ fun activeRppWindowEndMillis(regulation: RppZoneRegulation, now: LocalDateTime):
 data class RppWarning(
     val zoneLetters: Set<String>,
     val hrLimitHours: Float,
-    val moveByDateTime: LocalDateTime
+    val moveByDateTime: LocalDateTime,
+    /** True when the limit is RPP_ASSUMED_LIMIT_HOURS because the feed left it blank — reminders say so. */
+    val limitAssumed: Boolean = false
 )
 
 /**
@@ -105,7 +107,9 @@ data class RppWarning(
  * "limit is up" message and nothing scheduled for the next morning. It also means a limit at least
  * as long as the whole window (the feed has 72-hour rows) never yields a deadline at all.
  *
- * Also null for a limit of zero or less: the feed has ~850 rows with 0 or no HRLIMIT, and "0 hours"
+ * Also null for a limit of zero or less. Among the rows the app loads, the live feed has none with 0 and 10 with
+ * no HRLIMIT: 5 "Time Limited" ones are given an assumed limit when parsed (see RPP_ASSUMED_LIMIT_HOURS), and the
+ * rest (metered "Paid + Permit", junk) are left at 0, and "0 hours"
  * can't be turned into a meaningful move-by time. Days the city doesn't enforce time-limited RPP
  * ([SfHolidayCalendar.isRppSuspended]) are skipped like any other non-enforced day.
  */
@@ -144,7 +148,8 @@ fun nextRppDeadline(
                     return RppWarning(
                         zoneLetters = zoneLetters,
                         hrLimitHours = regulation.hrLimit,
-                        moveByDateTime = moveBy
+                        moveByDateTime = moveBy,
+                        limitAssumed = regulation.limitAssumed == true
                     )
                 }
             }
@@ -152,4 +157,16 @@ fun nextRppDeadline(
         candidateDate = candidateDate.plusDays(1)
     }
     return null
+}
+
+/**
+ * How a zone is named in notifications and cards: "RPP Zone A", or "RPP Zone A/Q" on a boundary block. When the
+ * limit is a stand-in (the city data left it blank — see RPP_ASSUMED_LIMIT_HOURS), the label says so, so nobody
+ * mistakes the guess for a posted limit: "RPP Zone S (limit not posted — assumed 2 h; check signs)".
+ */
+fun rppZoneLabel(warning: RppWarning): String {
+    val zones = "RPP Zone ${warning.zoneLetters.sorted().joinToString("/")}"
+    if (!warning.limitAssumed) return zones
+    val hours = warning.hrLimitHours.let { if (it % 1f == 0f) it.toInt().toString() else it.toString() }
+    return "$zones (limit not posted — assumed $hours h; check signs)"
 }

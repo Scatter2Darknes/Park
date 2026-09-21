@@ -285,7 +285,7 @@ private fun CarRow(
             // common case for most parked cars.
             item.rppDeadline?.let { deadline ->
                 Text(
-                    text = "RPP Zone ${deadline.zoneLetters.sorted().joinToString("/")} \u2014 " +
+                    text = "${rppZoneLabel(deadline)} \u2014 " +
                             "move by ${formatSweepDateTime(deadline.moveByDateTime.atZone(SF_ZONE))}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error

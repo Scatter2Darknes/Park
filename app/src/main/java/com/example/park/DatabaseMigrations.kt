@@ -139,9 +139,19 @@ val MIGRATION_12_13 = Migration(12, 13) { db ->
     db.execSQL("ALTER TABLE rpp_zone_regulation ADD COLUMN lastSeenSyncId INTEGER")
 }
 
+/**
+ * v13 -> v14: adds limitAssumed to rpp_zone_regulation — true when the row's hrLimit is a stand-in because the
+ * feed left the limit blank on a "Time Limited" row (see RPP_ASSUMED_LIMIT_HOURS). Nullable INTEGER with no
+ * default, like the earlier additive columns. Existing rows get NULL (= "not assumed"), which is right for
+ * every row already stored; the next RPP sync re-inserts rows with the new parse.
+ */
+val MIGRATION_13_14 = Migration(13, 14) { db ->
+    db.execSQL("ALTER TABLE rpp_zone_regulation ADD COLUMN limitAssumed INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12, MIGRATION_12_13
+    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14
 )
 
 /*

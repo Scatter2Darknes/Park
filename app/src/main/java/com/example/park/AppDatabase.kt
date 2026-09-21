@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -139,7 +139,7 @@ suspend fun saveParkedState(
             context = context,
             carId = carId,
             carName = car?.name ?: "Your car",
-            zoneLabel = "RPP Zone ${rppDeadline.zoneLetters.sorted().joinToString("/")}",
+            zoneLabel = rppZoneLabel(rppDeadline),
             moveByAtMillis = rppDeadline.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli(),
             parkedAtMillis = parkedAtMillis,
             reminderOffsetMillis = reminderOffsetMillis,

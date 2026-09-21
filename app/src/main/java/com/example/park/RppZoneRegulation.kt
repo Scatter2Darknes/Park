@@ -18,6 +18,9 @@ data class RppZoneRegulation(
     val hrsBegin: Int,       // military time, e.g. 800 = 8:00am
     val hrsEnd: Int,         // military time, e.g. 1800 = 6:00pm
     val hrLimit: Float,      // hours a non-permit-holding vehicle may park before this counts against it
+    // true when hrLimit is a stand-in (RPP_ASSUMED_LIMIT_HOURS) because the feed left the limit blank on a
+    // "Time Limited" row. Null on every other row (and on rows synced before this column existed).
+    val limitAssumed: Boolean? = null,
     val points: List<LatLng>,
     val centroidLat: Double,
     val centroidLng: Double,

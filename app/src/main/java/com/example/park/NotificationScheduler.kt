@@ -563,7 +563,7 @@ private suspend fun armParkedState(
     if (rpp != null) {
         scheduleTiers(
             context, parked.carId, car.name,
-            "RPP Zone ${rpp.warning.zoneLetters.sorted().joinToString("/")}",
+            rppZoneLabel(rpp.warning),
             rpp.moveByMillis, parked.parkedAtMillis,
             ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
             parked.rppNormalDeliveredForMillis, parked.rppUrgentDeliveredForMillis, clearStaleNotifications,

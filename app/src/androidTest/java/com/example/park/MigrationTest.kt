@@ -111,7 +111,33 @@ class MigrationTest {
     @Test
     fun migrateFrom11ThroughToCurrent_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 11).close()
-        helper.runMigrationsAndValidate(TEST_DB, 13, true, MIGRATION_11_12, MIGRATION_12_13).close()
+        helper.runMigrationsAndValidate(TEST_DB, 14, true, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14).close()
+    }
+
+    @Test
+    fun migrate13To14_keepsRppRows_andAddsNullLimitAssumed() {
+        helper.createDatabase(TEST_DB, 13).apply {
+            execSQL(
+                """
+                INSERT INTO rpp_zone_regulation
+                    (objectId, zoneLetters, days, hrsBegin, hrsEnd, hrLimit, points, centroidLat, centroidLng, lastSeenSyncId)
+                VALUES
+                    ('rpp-7', 'A', 'M-F', 800, 1800, 2.0, '[[37.1,-122.1]]', 37.1, -122.1, 555)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 14, true, MIGRATION_13_14)
+
+        db.query("SELECT zoneLetters, hrLimit, lastSeenSyncId, limitAssumed FROM rpp_zone_regulation").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("A", c.getString(0))
+            assertEquals(2.0, c.getDouble(1), 0.0)
+            assertEquals(555L, c.getLong(2))
+            assertTrue("limitAssumed should be NULL after migration", c.isNull(3))
+            assertEquals(1, c.count)
+        }
     }
 
     private companion object {
