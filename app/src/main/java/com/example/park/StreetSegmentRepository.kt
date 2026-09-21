@@ -42,7 +42,7 @@ class StreetSegmentRepository(private val context: Context) {
                 // attempt (and the one after that, backing off further each time) started from
                 // zero with nothing on the map to show for it. Now whatever synced before a
                 // failure stays saved.
-                val count = fetchAllSegments(context) { page ->
+                val fetch = fetchAllSegments(context) { page ->
                     db.streetSegmentDao().insertAll(page.map { it.copy(lastSeenSyncId = syncId) })
                     fetchedThisAttempt += page.size
                     StreetDataSyncCenter.onSyncAttemptProgress(fetchedThisAttempt)
@@ -52,16 +52,16 @@ class StreetSegmentRepository(private val context: Context) {
                 // on a fully successful sync (fetchAllSegments throws on an unrecoverable page
                 // failure), consistent with "last synced" meaning a complete sync, not a
                 // partial one.
-                SettingsRepository(context).setLastRefreshMillis(System.currentTimeMillis())
+                if (fetch.complete) SettingsRepository(context).setLastRefreshMillis(System.currentTimeMillis())
                 // Same condition as the timestamp above — only reached after a FULLY successful sync.
                 // A failure here must not turn a good sync into a failed one.
                 try {
-                    pruneStaleStreetSegments(context, syncId, existingCount, count)
+                    pruneStaleStreetSegments(context, syncId, existingCount, fetch)
                 } catch (e: Exception) {
                     android.util.Log.w("DataSF", "Stale-segment cleanup failed", e)
                 }
                 refreshParkedSchedulesAfterSync(context)
-                return count
+                return fetch.keptRows
             } finally {
                 StreetDataSyncCenter.onSyncAttemptEnded()
             }

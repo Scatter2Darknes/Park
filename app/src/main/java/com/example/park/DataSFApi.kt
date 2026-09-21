@@ -10,7 +10,18 @@ import java.net.HttpURLConnection
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
-suspend fun fetchSweepingPage(context: Context, limit: Int, offset: Int): String {
+suspend fun fetchSweepingPage(context: Context, limit: Int, offset: Int): String =
+    fetchSweepingQuery(context, "\$limit=$limit&\$offset=$offset", "offset $offset")
+
+/** The server's own row count (`[{"count":"37878"}]`), used to check a fetch was complete. */
+suspend fun fetchSweepingTotal(context: Context): Int =
+    parseSocrataCount(fetchSweepingQuery(context, "\$select=count(*)", "count query"))
+        ?: throw Exception("No count in Socrata count response")
+
+internal fun parseSocrataCount(json: String): Int? =
+    JSONArray(json).optJSONObject(0)?.optString("count")?.toIntOrNull()
+
+private suspend fun fetchSweepingQuery(context: Context, query: String, what: String): String {
     return withContext(Dispatchers.IO) {
         // data.sf.gov, not data.sfgov.org \u2014 the site has moved to the newer domain, and
         // connecting directly to it (rather than relying on a possible redirect from the old
@@ -18,7 +29,7 @@ suspend fun fetchSweepingPage(context: Context, limit: Int, offset: Int): String
         // handshake is the SAME one DataSfTrustConfig's bundled intermediate was matched
         // against. SNI/certificate selection happens against whichever hostname is dialed
         // first, before any HTTP-level redirect is even seen.
-        val url = URL("https://data.sf.gov/resource/yhqp-riqs.json?\$limit=$limit&\$offset=$offset")
+        val url = URL("https://data.sf.gov/resource/yhqp-riqs.json?$query")
         val connection = url.openConnection() as HttpURLConnection
         if (connection is HttpsURLConnection) {
             // See DataSfTrustConfig's class doc \u2014 works around data.sf.gov not sending
@@ -38,7 +49,7 @@ suspend fun fetchSweepingPage(context: Context, limit: Int, offset: Int): String
             val code = connection.responseCode
             if (code != 200) {
                 val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }
-                throw Exception("HTTP $code at offset $offset: $errorBody")
+                throw Exception("HTTP $code at $what: $errorBody")
             }
             connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
@@ -48,7 +59,10 @@ suspend fun fetchSweepingPage(context: Context, limit: Int, offset: Int): String
 }
 
 
-suspend fun fetchWithRetry(context: Context, limit: Int, offset: Int, maxAttempts: Int = 3): String {
+suspend fun fetchWithRetry(context: Context, limit: Int, offset: Int, maxAttempts: Int = 3): String =
+    retrySweeping(context, "offset $offset", maxAttempts) { fetchSweepingPage(context, limit, offset) }
+
+private suspend fun <T> retrySweeping(context: Context, what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
     // A configured DataSF app token was assumed to move the client out of Socrata's shared
     // anonymous throttling pool entirely — but real testing at 300ms/1s-2s-3s (this function's
     // first tuning for the token path) still hit HTTP 425 with an empty body at basically the
@@ -61,42 +75,70 @@ suspend fun fetchWithRetry(context: Context, limit: Int, offset: Int, maxAttempt
     var lastError: Exception? = null
     repeat(maxAttempts) { attempt ->
         try {
-            return fetchSweepingPage(context, limit, offset)
+            return request()
         } catch (e: Exception) {
             lastError = e
-            Log.w("DataSF", "Attempt ${attempt + 1} failed at offset $offset: ${e.message}")
+            Log.w("DataSF", "Attempt ${attempt + 1} failed at $what: ${e.message}")
             val backoffBaseMillis = if (hasToken) 3500L else 4500L
             delay(backoffBaseMillis * (attempt + 1))
         }
     }
-    throw lastError ?: Exception("Unknown fetch failure at offset $offset")
+    throw lastError ?: Exception("Unknown fetch failure at $what")
 }
 
-suspend fun fetchAllSegments(context: Context, onPage: suspend (List<StreetSegment>) -> Unit): Int {
-    val pageSize = 1000
-    var offset = 0
-    var total = 0
+suspend fun fetchAllSegments(context: Context, onPage: suspend (List<StreetSegment>) -> Unit): FeedFetch {
     val hasToken = ApiKeys.dataSfAppToken(context).isNotBlank()
     val pageSpacingMillis = if (hasToken) 1800L else 2800L
-    while (true) {
-        if (offset > 0) {
-            // A pause between successful page requests, not just between retries of the same
-            // one — testing showed data.sfgov.org (or whatever sits in front of it) starts
-            // returning HTTP 425 after only a handful of back-to-back requests, and a
-            // configured app token didn't meaningfully change that in practice (see
-            // fetchWithRetry's comment) — so this stays close to the anonymous pacing rather
-            // than assuming the token buys much headroom.
-            delay(pageSpacingMillis)
-        }
-        val json = fetchWithRetry(context, pageSize, offset)
-        val page = parseSegments(json)
+    return collectSegmentPages(
+        pageSize = 1000,
+        // A pause between successful requests, not just between retries of the same
+        // one — testing showed data.sfgov.org (or whatever sits in front of it) starts
+        // returning HTTP 425 after only a handful of back-to-back requests, and a
+        // configured app token didn't meaningfully change that in practice (see
+        // fetchWithRetry's comment) — so this stays close to the anonymous pacing rather
+        // than assuming the token buys much headroom.
+        pause = { delay(pageSpacingMillis) },
+        fetchPage = { limit, offset -> fetchWithRetry(context, limit, offset) },
+        fetchServerTotal = { retrySweeping(context, "count query") { fetchSweepingTotal(context) } },
+        onPage = onPage,
+        log = { Log.d("DataSF", it) }
+    )
+}
+
+/**
+ * The paging loop, with the network, pacing and logging injected so a unit test can drive it with a
+ * fake server. Socrata has no "more rows" flag, so a page shorter than [pageSize] ends the walk; the
+ * caller then checks the total against the server's own count before trusting it (see pruneSkipReason).
+ * [parseSegments] keeps every row, so a page's parsed size is also its raw size.
+ */
+internal suspend fun collectSegmentPages(
+    pageSize: Int,
+    pause: suspend () -> Unit,
+    fetchPage: suspend (limit: Int, offset: Int) -> String,
+    fetchServerTotal: suspend () -> Int,
+    onPage: suspend (List<StreetSegment>) -> Unit,
+    log: (String) -> Unit = {}
+): FeedFetch {
+    var offset = 0
+    var complete = false
+    var pages = 0
+    while (pages < MAX_FEED_PAGES) {
+        if (offset > 0) pause()
+        val page = parseSegments(fetchPage(pageSize, offset))
+        pages++
         onPage(page)
-        total += page.size
-        Log.d("DataSF", "Fetched page at offset $offset: ${page.size} rows")
-        if (page.size < pageSize) break
-        offset += pageSize
+        offset += page.size
+        log("Fetched page at offset ${offset - page.size}: ${page.size} rows")
+        if (page.size < pageSize) {
+            complete = true
+            break
+        }
     }
-    return total
+    val serverTotal = if (complete) {
+        pause()
+        readServerTotalOrNull(log) { fetchServerTotal() }
+    } else null
+    return FeedFetch(keptRows = offset, rawRows = offset, complete = complete, serverTotal = serverTotal)
 }
 
 fun parseSegments(json: String): List<StreetSegment> {

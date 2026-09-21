@@ -22,19 +22,20 @@ class RppZoneRepository(private val context: Context) {
             StreetDataSyncCenter.onRppSyncAttemptStarted()
             var fetchedThisAttempt = 0
             try {
-                val total = fetchAllRppRegulations { page ->
+                val fetch = fetchAllRppRegulations { page ->
                     db.rppZoneRegulationDao().insertAll(page.map { it.copy(lastSeenSyncId = syncId) })
                     fetchedThisAttempt += page.size
                     StreetDataSyncCenter.onRppSyncAttemptProgress(fetchedThisAttempt)
                 }
-                // fetchAllRppRegulations throws on an unrecoverable page failure, so reaching here
-                // means the sync fully succeeded — the only time it's safe to delete unseen rows.
+                // fetchAllRppRegulations throws on an unrecoverable page failure, but reaching here is
+                // still not enough to delete: the fetch must also be provably complete (reached the last
+                // page and matched the server's own count) — see pruneSkipReason.
                 try {
-                    pruneStaleRppRegulations(context, syncId, existingCount, total)
+                    pruneStaleRppRegulations(context, syncId, existingCount, fetch)
                 } catch (e: Exception) {
                     android.util.Log.w("RppSync", "Stale-RPP cleanup failed", e)
                 }
-                return total
+                return fetch.keptRows
             } finally {
                 StreetDataSyncCenter.onRppSyncAttemptEnded()
             }

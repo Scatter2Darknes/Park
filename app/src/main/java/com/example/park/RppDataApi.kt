@@ -29,18 +29,11 @@ private const val RPP_OUT_FIELDS = "OBJECTID,REGULATION,DAYS,HRS_BEGIN,HRS_END,H
  */
 const val RPP_ASSUMED_LIMIT_HOURS = 2f
 
-suspend fun fetchRppPage(limit: Int, offset: Int): String = withContext(Dispatchers.IO) {
-    val query = "where=${URLEncoder.encode(RPP_WHERE_CLAUSE, "UTF-8")}" +
-            "&outFields=$RPP_OUT_FIELDS" +
-            "&orderByFields=OBJECTID" +
-            "&returnGeometry=true" +
-            "&resultOffset=$offset" +
-            "&resultRecordCount=$limit" +
-            // The layer's native spatial reference is already WGS84 (wkid 4326, checked against the
-            // layer's own metadata), but the parser reads geometry as [lng, lat] degrees, so ask for it
-            // explicitly rather than depend on that never changing.
-            "&outSR=4326" +
-            "&f=json"
+private fun rppQuery(vararg parts: String): String =
+    "where=${URLEncoder.encode(RPP_WHERE_CLAUSE, "UTF-8")}&" + parts.joinToString("&") + "&f=json"
+
+/** One GET against the feature service; [what] names the request in error messages. */
+private suspend fun rppGet(query: String, what: String): String = withContext(Dispatchers.IO) {
     val url = URL("$RPP_FEATURE_SERVICE_URL?$query")
     val connection = url.openConnection() as HttpURLConnection
     connection.requestMethod = "GET"
@@ -50,14 +43,14 @@ suspend fun fetchRppPage(limit: Int, offset: Int): String = withContext(Dispatch
         val code = connection.responseCode
         if (code != 200) {
             val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }
-            throw Exception("HTTP $code at offset $offset: $errorBody")
+            throw Exception("HTTP $code at $what: $errorBody")
         }
         val body = connection.inputStream.bufferedReader().use { it.readText() }
         // ArcGIS returns HTTP 200 even for a malformed request — the actual error shows up as
         // an "error" object in the JSON body instead, so that has to be checked explicitly.
         val error = JSONObject(body).optJSONObject("error")
         if (error != null) {
-            throw Exception("ArcGIS error at offset $offset: ${error.optString("message")}")
+            throw Exception("ArcGIS error at $what: ${error.optString("message")}")
         }
         body
     } finally {
@@ -65,34 +58,108 @@ suspend fun fetchRppPage(limit: Int, offset: Int): String = withContext(Dispatch
     }
 }
 
-suspend fun fetchRppPageWithRetry(limit: Int, offset: Int, maxAttempts: Int = 3): String {
+suspend fun fetchRppPage(limit: Int, offset: Int): String = rppGet(
+    rppQuery(
+        "outFields=$RPP_OUT_FIELDS",
+        "orderByFields=OBJECTID",
+        "returnGeometry=true",
+        "resultOffset=$offset",
+        "resultRecordCount=$limit",
+        // The layer's native spatial reference is already WGS84 (wkid 4326, checked against the
+        // layer's own metadata), but the parser reads geometry as [lng, lat] degrees, so ask for it
+        // explicitly rather than depend on that never changing.
+        "outSR=4326"
+    ),
+    "offset $offset"
+)
+
+/** The server's own row count for the same filter (`{"count":6502}`), used to check a fetch was complete. */
+suspend fun fetchRppTotal(): Int =
+    parseRppCount(rppGet(rppQuery("returnCountOnly=true"), "count query"))
+        ?: throw Exception("No count in ArcGIS count response")
+
+internal fun parseRppCount(json: String): Int? =
+    JSONObject(json).takeIf { it.has("count") && !it.isNull("count") }?.optInt("count", -1)?.takeIf { it >= 0 }
+
+private suspend fun <T> retryRpp(what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
     var lastError: Exception? = null
     repeat(maxAttempts) { attempt ->
         try {
-            return fetchRppPage(limit, offset)
+            return request()
         } catch (e: Exception) {
             lastError = e
-            Log.w("RppSync", "Attempt ${attempt + 1} failed at offset $offset: ${e.message}")
+            Log.w("RppSync", "Attempt ${attempt + 1} failed at $what: ${e.message}")
             delay(1500L * (attempt + 1))
         }
     }
-    throw lastError ?: Exception("Unknown fetch failure at offset $offset")
+    throw lastError ?: Exception("Unknown fetch failure at $what")
 }
 
-suspend fun fetchAllRppRegulations(onPage: suspend (List<RppZoneRegulation>) -> Unit): Int {
-    val pageSize = 2000
+suspend fun fetchRppPageWithRetry(limit: Int, offset: Int, maxAttempts: Int = 3): String =
+    retryRpp("offset $offset", maxAttempts) { fetchRppPage(limit, offset) }
+
+suspend fun fetchAllRppRegulations(onPage: suspend (List<RppZoneRegulation>) -> Unit): FeedFetch =
+    collectRppPages(
+        pageSize = 2000,
+        fetchPage = ::fetchRppPageWithRetry,
+        fetchServerTotal = { retryRpp("count query") { fetchRppTotal() } },
+        onPage = onPage,
+        log = { Log.d("RppSync", it) }
+    )
+
+/**
+ * The paging loop, with the network and logging injected so a unit test can drive it with a fake server.
+ *
+ * Paging is driven by what the SERVER says, never by how many rows survived parsing: the parser drops
+ * junk rows, so a parsed page can be short while the server still has more (the bug that once stopped
+ * the sync after two of four pages). It continues while the response carries `exceededTransferLimit`
+ * (or, when the flag is absent, while the raw page was full), and advances the offset by the raw rows
+ * actually returned — the server may cap a page below the requested size.
+ */
+internal suspend fun collectRppPages(
+    pageSize: Int,
+    fetchPage: suspend (limit: Int, offset: Int) -> String,
+    fetchServerTotal: suspend () -> Int,
+    onPage: suspend (List<RppZoneRegulation>) -> Unit,
+    log: (String) -> Unit = {}
+): FeedFetch {
     var offset = 0
-    var total = 0
-    while (true) {
-        val json = fetchRppPageWithRetry(pageSize, offset)
-        val page = parseRppRegulations(json)
-        onPage(page)
-        total += page.size
-        Log.d("RppSync", "Fetched RPP page at offset $offset: ${page.size} rows")
-        if (page.size < pageSize) break
-        offset += pageSize
+    var kept = 0
+    var complete = false
+    var pages = 0
+    while (pages < MAX_FEED_PAGES) {
+        val page = parseRppPage(fetchPage(pageSize, offset))
+        pages++
+        onPage(page.rows)
+        kept += page.rows.size
+        log("Fetched RPP page at offset $offset: ${page.rawCount} raw, ${page.rows.size} kept")
+        offset += page.rawCount
+        val more = page.exceededTransferLimit ?: (page.rawCount >= pageSize)
+        if (!more) {
+            complete = true
+            break
+        }
+        // The server says there is more but returned nothing, so the offset can't advance: give up
+        // (incomplete) rather than ask for the same page forever.
+        if (page.rawCount == 0) break
     }
-    return total
+    val serverTotal = if (complete) readServerTotalOrNull(log) { fetchServerTotal() } else null
+    return FeedFetch(keptRows = kept, rawRows = offset, complete = complete, serverTotal = serverTotal)
+}
+
+/** One parsed ArcGIS response: the kept rows plus what the server said about the page itself. */
+internal class RppPage(val rows: List<RppZoneRegulation>, val rawCount: Int, val exceededTransferLimit: Boolean?)
+
+internal fun parseRppPage(json: String): RppPage {
+    val root = JSONObject(json)
+    val flag = if (root.has("exceededTransferLimit") && !root.isNull("exceededTransferLimit")) {
+        root.optBoolean("exceededTransferLimit")
+    } else null
+    return RppPage(
+        rows = parseRppRegulations(root),
+        rawCount = root.optJSONArray("features")?.length() ?: 0,
+        exceededTransferLimit = flag
+    )
 }
 
 /**
@@ -118,8 +185,9 @@ internal fun JSONObject.optCleanString(key: String): String? {
  * RPP blockface row observed live has exactly one, so only the first is kept here — matching
  * how StreetSegment models one physical curb-side as a single polyline.
  */
-fun parseRppRegulations(json: String): List<RppZoneRegulation> {
-    val root = JSONObject(json)
+fun parseRppRegulations(json: String): List<RppZoneRegulation> = parseRppRegulations(JSONObject(json))
+
+internal fun parseRppRegulations(root: JSONObject): List<RppZoneRegulation> {
     val features = root.optJSONArray("features") ?: return emptyList()
     val result = mutableListOf<RppZoneRegulation>()
     for (i in 0 until features.length()) {
