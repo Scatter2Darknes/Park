@@ -111,7 +111,7 @@ class MigrationTest {
     @Test
     fun migrateFrom11ThroughToCurrent_runsTheWholeChain() {
         helper.createDatabase(TEST_DB, 11).close()
-        helper.runMigrationsAndValidate(TEST_DB, 14, true, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14).close()
+        helper.runMigrationsAndValidate(TEST_DB, 15, true, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15).close()
     }
 
     @Test
@@ -137,6 +137,33 @@ class MigrationTest {
             assertEquals(555L, c.getLong(2))
             assertTrue("limitAssumed should be NULL after migration", c.isNull(3))
             assertEquals(1, c.count)
+        }
+    }
+
+    @Test
+    fun migrate14To15_keepsSegments_andCreatesTheCurbIndex() {
+        helper.createDatabase(TEST_DB, 14).apply {
+            execSQL(
+                """
+                INSERT INTO street_segment
+                    (blockSweepId, cnn, corridor, limits, cnnRightLeft, blockSide, fullName,
+                     fromHour, toHour, week1, week2, week3, week4, week5, holidays,
+                     points, centroidLat, centroidLng)
+                VALUES
+                    ('seg-1', '123', 'Main St', 'A to B', 'R', 'North', 'Mon', 6, 8, 1, 1, 1, 1, 1, 0, '[[37.1,-122.1],[37.2,-122.2]]', 37.15, -122.15),
+                    ('seg-2', '123', 'Main St', 'A to B', 'R', 'North', 'Thu', 6, 8, 1, 1, 1, 1, 1, 0, '[[37.1,-122.1],[37.2,-122.2]]', 37.15, -122.15)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 15, true, MIGRATION_14_15)
+
+        db.query("SELECT COUNT(*) FROM street_segment WHERE cnn = '123' AND cnnRightLeft = 'R'").use { c ->
+            assertTrue(c.moveToFirst()); assertEquals(2, c.getInt(0))
+        }
+        db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'index_street_segment_cnn_cnnRightLeft'").use { c ->
+            assertEquals("the curb index should exist", 1, c.count)
         }
     }
 

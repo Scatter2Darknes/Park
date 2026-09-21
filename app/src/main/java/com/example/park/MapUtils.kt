@@ -743,7 +743,9 @@ suspend fun loadAndDrawSegments(
     // once, since the line and any label on it now always come from the same chosen row.
     val prepared = allPrepared
         .groupBy { "${it.segment.cnn}|${it.segment.cnnRightLeft}" }
-        .map { (_, group) -> group.sortedBy { it.status.urgencyRank() }.first() }
+        // Most urgent row wins; on a tie prefer a real weekday row over an unparseable "HOLIDAY" one, so the line
+        // and the tap target never come from a row that says "no upcoming cleaning" for a curb that is swept.
+        .map { (_, group) -> CurbSchedule.pickByUrgency(group, { it.segment }, { it.status }) }
 
     prepared.forEach { p ->
         // Wide, invisible line — purely for a bigger, easier tap target.
@@ -912,16 +914,6 @@ suspend fun reloadSegmentsAndMarkers(
         }
     }
     return nearbyCount
-}
-/*
-Used to pick a single representative row when multiple StreetSegment
-*  rows describe the same physical curb-side with different (and sometimes disagreeing)
-*  schedules — see the dedup step in loadAndDrawSegments. */
-private fun SweepStatus.urgencyRank(): Int = when (this) {
-    SweepStatus.ACTIVE_OR_VERY_SOON -> 0
-    SweepStatus.IMMINENT -> 1
-    SweepStatus.SOON -> 2
-    SweepStatus.SAFE -> 3
 }
 
 private fun distanceMetersBetween(a: LatLng, b: LatLng): Double {

@@ -57,6 +57,9 @@ interface ParkedStateDao {
     @Query("UPDATE parked_state SET notificationScheduled = :scheduled WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun setNotificationScheduled(carId: Long, parkedAtMillis: Long, scheduled: Boolean)
 
+    @Query("SELECT * FROM parked_state WHERE segmentBlockSweepId IN (:blockSweepIds)")
+    suspend fun getForSegments(blockSweepIds: List<String>): List<ParkedState>
+
     @Query("SELECT * FROM parked_state WHERE segmentBlockSweepId = :blockSweepId")
     suspend fun getForSegment(blockSweepId: String): List<ParkedState>
 

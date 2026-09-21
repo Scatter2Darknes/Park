@@ -149,9 +149,18 @@ val MIGRATION_13_14 = Migration(13, 14) { db ->
     db.execSQL("ALTER TABLE rpp_zone_regulation ADD COLUMN limitAssumed INTEGER")
 }
 
+/**
+ * v14 -> v15: adds an index on street_segment (cnn, cnnRightLeft), the key that identifies one physical curb, so
+ * CurbSchedule's "all rows for this curb" lookup doesn't scan the whole ~38,000-row table each time. An index changes
+ * no data. The name is the one Room generates for that column pair, which its schema validation checks.
+ */
+val MIGRATION_14_15 = Migration(14, 15) { db ->
+    db.execSQL("CREATE INDEX IF NOT EXISTS `index_street_segment_cnn_cnnRightLeft` ON `street_segment` (`cnn`, `cnnRightLeft`)")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14
+    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
 )
 
 /*

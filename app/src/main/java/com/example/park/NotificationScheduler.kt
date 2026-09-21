@@ -526,7 +526,8 @@ private suspend fun armParkedState(
     // A segment that's gone (never synced, or retired upstream) keeps its stored deadline: a
     // reminder that might be stale beats silently dropping one that might be real.
     if (segment != null) {
-        val recomputed = NextSweepCalculator.nextSweepDateTime(segment)
+        // Across every row of the curb (see CurbSchedule), so a sweep day carried by a sibling row is never lost.
+        val recomputed = CurbSchedule.nextSweepDateTime(loadCurbRows(context, segment))
             ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         val old = parked.nextSweepAtMillis
         if (recomputed != old) {
@@ -617,9 +618,18 @@ suspend fun recomputeParkedSchedule(context: Context, carId: Long, expectedParke
         if (changed) enqueueWidgetRefresh(context)
     }
 
-/** [recomputeParkedSchedule] for every parked car on [blockSweepId] — what an override save/remove needs. */
+/**
+ * [recomputeParkedSchedule] for every parked car on the same CURB as [blockSweepId] — what an override save/remove
+ * needs. A car parked on a sibling row of the curb is affected too, because its deadline is the earliest sweep across
+ * all the curb's rows (see CurbSchedule), so an override on any one of them can move it.
+ */
 suspend fun recomputeSchedulesForSegment(context: Context, blockSweepId: String) {
-    AppDatabase.getInstance(context).parkedStateDao().getForSegment(blockSweepId).forEach {
+    val db = AppDatabase.getInstance(context)
+    val curbIds = db.streetSegmentDao().getById(blockSweepId)
+        ?.let { db.streetSegmentDao().getByCurb(it.cnn, it.cnnRightLeft).map { row -> row.blockSweepId } }
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf(blockSweepId)
+    db.parkedStateDao().getForSegments(curbIds).forEach {
         recomputeParkedSchedule(context, it.carId)
     }
 }

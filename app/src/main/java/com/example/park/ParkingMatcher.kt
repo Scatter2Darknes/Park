@@ -6,6 +6,11 @@ data class SegmentMatch(val segment: StreetSegment, val distanceMeters: Double)
 
 enum class MatchConfidence { CONFIDENT, AMBIGUOUS, NO_MATCH }
 
+/**
+ * Candidate curbs near [point], nearest first, ONE per physical curb: a curb described by several database rows
+ * (one per sweep day / week pattern) is collapsed to a single candidate — see CurbSchedule.collapseSameCurb — so
+ * it isn't mistaken for an ambiguous match and the picker doesn't list the same curb repeatedly.
+ */
 suspend fun findNearbySegmentMatches(context: Context, point: LatLng, radiusDegrees: Double = 0.0015): List<SegmentMatch> {
     val db = AppDatabase.getInstance(context)
     val nearby = db.streetSegmentDao().getNearby(
@@ -18,7 +23,7 @@ suspend fun findNearbySegmentMatches(context: Context, point: LatLng, radiusDegr
         if (segment.points.size < 2) return@mapNotNull null
         val offsetPoints = offsetPolylineForSide(segment.points, segment.cnnRightLeft)
         SegmentMatch(segment, distancePointToPolylineMeters(point, offsetPoints))
-    }.sortedBy { it.distanceMeters }
+    }.sortedBy { it.distanceMeters }.let { CurbSchedule.collapseSameCurb(it) }
 }
 
 fun classifyMatch(matches: List<SegmentMatch>): MatchConfidence {

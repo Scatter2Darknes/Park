@@ -3,7 +3,9 @@ package com.example.park
 import androidx.room.*
 import org.json.JSONArray
 
-@Entity(tableName = "street_segment")
+// The (cnn, cnnRightLeft) index serves getByCurb: DataSF describes one physical curb with several rows
+// (one per sweep day / week pattern), and the parked-car code needs all of them at once.
+@Entity(tableName = "street_segment", indices = [Index(value = ["cnn", "cnnRightLeft"])])
 @TypeConverters(LatLngListConverter::class)
 data class StreetSegment(
     @PrimaryKey val blockSweepId: String,
@@ -112,4 +114,25 @@ interface StreetSegmentDao {
         LIMIT 1
     """)
     suspend fun getById(id: String): StreetSegment?
+
+    // EVERY row for one physical curb-side (cnn + side), override-aware like getById/getNearby. A curb is often
+    // described by several rows — one per sweep weekday, or per week pattern — so anything that must know "when is
+    // this curb next swept" has to look at all of them, not just the one row that happened to be matched or tapped.
+    @Query("""
+        SELECT
+            s.blockSweepId, s.cnn, s.corridor, s.limits, s.cnnRightLeft, s.blockSide,
+            COALESCE(o.fullName, s.fullName) AS fullName,
+            COALESCE(o.fromHour, s.fromHour) AS fromHour,
+            COALESCE(o.toHour, s.toHour) AS toHour,
+            COALESCE(o.week1, s.week1) AS week1,
+            COALESCE(o.week2, s.week2) AS week2,
+            COALESCE(o.week3, s.week3) AS week3,
+            COALESCE(o.week4, s.week4) AS week4,
+            COALESCE(o.week5, s.week5) AS week5,
+            s.holidays, s.points, s.centroidLat, s.centroidLng, s.lastSeenSyncId
+        FROM street_segment s
+        LEFT JOIN schedule_override o ON s.blockSweepId = o.blockSweepId
+        WHERE s.cnn = :cnn AND s.cnnRightLeft = :cnnRightLeft
+    """)
+    suspend fun getByCurb(cnn: String, cnnRightLeft: String): List<StreetSegment>
 }

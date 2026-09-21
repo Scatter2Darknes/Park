@@ -103,3 +103,15 @@ fun sweepStatusColor(status: SweepStatus, colors: SweepStatusColors = SweepStatu
     SweepStatus.IMMINENT -> parseColorOrDefault(colors.imminentHex, SettingsDefaults.IMMINENT_COLOR_HEX)
     SweepStatus.ACTIVE_OR_VERY_SOON -> parseColorOrDefault(colors.activeHex, SettingsDefaults.ACTIVE_COLOR_HEX)
 }
+/**
+ * Lower = more urgent. Used to pick one representative row when several StreetSegment rows describe the same physical
+ * curb-side with different (and sometimes disagreeing) schedules — the map's per-curb de-duplication and CurbSchedule.
+ * Lives here, next to SweepStatus, rather than in MapUtils.kt, whose file-level initialization needs Android classes
+ * and so can't load in JVM unit tests.
+ */
+internal fun SweepStatus.urgencyRank(): Int = when (this) {
+    SweepStatus.ACTIVE_OR_VERY_SOON -> 0
+    SweepStatus.IMMINENT -> 1
+    SweepStatus.SOON -> 2
+    SweepStatus.SAFE -> 3
+}

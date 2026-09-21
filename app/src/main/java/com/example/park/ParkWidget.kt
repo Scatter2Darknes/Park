@@ -224,8 +224,9 @@ private suspend fun loadWidgetSummary(context: Context): WidgetSummary {
     val segment = mostUrgent.parkedState?.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
     val frameColor = if (segment != null) {
         val settings = SettingsRepository(context)
+        // The curb's most urgent row, not just the saved one: a curb swept on several days is as urgent as its soonest.
         sweepStatusColor(
-            sweepStatus(segment, thresholds = settings.sweepThresholdsSnapshot()),
+            CurbSchedule.mostUrgentStatus(loadCurbRows(context, segment), sfNow(), settings.sweepThresholdsSnapshot()),
             settings.sweepStatusColorsSnapshot()
         )
     } else {

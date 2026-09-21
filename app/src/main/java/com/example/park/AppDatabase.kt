@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -62,7 +62,10 @@ suspend fun saveParkedState(
     val db = AppDatabase.getInstance(context)
     val parkedAtMillis = System.currentTimeMillis()
     val parkedAt = java.time.Instant.ofEpochMilli(parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
-    val next = NextSweepCalculator.nextSweepDateTime(segment)
+    // The whole CURB's schedule, not just the matched row's: a curb is often described by several rows (one per
+    // sweep weekday / week pattern), and parking on one must cover them all — see CurbSchedule.
+    val curbRows = loadCurbRows(context, segment)
+    val next = CurbSchedule.nextSweepDateTime(curbRows)
     val nextMillis = next?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
 
     // RPP is matched against the CONFIRMED segment's curb-side location, not the raw [point] —
@@ -162,7 +165,7 @@ suspend fun saveParkedState(
     // A stale Bluetooth "Did X just park?" prompt from an earlier spot is replaced by this new park.
     // (The Bluetooth flows post their own notice after saveParkedState returns, so this can't erase it.)
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT))
-    val sweepEnd = NextSweepCalculator.sweepInProgressEndDateTime(segment, parkedAt)
+    val sweepEnd = CurbSchedule.sweepInProgressEnd(curbRows, parkedAt)
     if (sweepEnd != null) {
         val endMillis = sweepEnd.atZone(SF_ZONE).toInstant().toEpochMilli()
         val carName = car?.name ?: "Your car"
