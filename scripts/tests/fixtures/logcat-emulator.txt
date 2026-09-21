@@ -1,0 +1,20 @@
+--------- beginning of main
+09-20 19:36:31.762  4494  4530 I ParkDebug: UNPARK: car 1 cleared (reminders cancelled, parked state removed)
+09-20 19:37:48.853  4494  4529 D RppSync : saveParkedState: RPP match = zone=L objectId=3032 days=M-F hrsBegin=800 hrsEnd=1800 hrLimit=2.0
+09-20 19:37:48.889  4494  4528 D RppSync : saveParkedState: RPP deadline = 2026-09-21T10:00
+09-20 19:37:48.901  4494  4528 I ParkDebug: PARK: car 1 saved on 03rd Ave (Geary Blvd  -  Anza St), segment=1601988, curb=155000|R, confidence=AMBIGUOUS, 14 candidate curb(s)
+09-20 19:37:54.058  4494  4783 I ParkDebug: REARM: rearmAllActiveReminders finished
+09-20 19:39:21.796  4494  4867 I ParkDebug: DUMP_STATE begin: now=2026-09-20T19:39:21.746 PT (1789958361746) exactAlarmsAllowed=true reminderOffsetMin=120 urgentOffsetMin=15
+09-20 19:39:21.806  4494  4867 I ParkDebug: cars: id=1 name='My Car' permitZones=null
+09-20 19:39:21.807  4494  4867 I ParkDebug: parked states: 1
+09-20 19:39:21.811  4494  4867 I ParkDebug: PARKED car=1 'My Car' segment=1601988 curb=155000|R curbRows=1 corridor='03rd Ave' sideConfirmed=true parkedAt=2026-09-20T19:37:48.845 PT (1789958268845)
+09-20 19:39:21.811  4494  4867 I ParkDebug:   sweep: stored=2026-10-01T07:00 PT (1790863200000) recomputedNow=2026-10-01T07:00 PT (1790863200000) notificationScheduled=true
+09-20 19:39:21.811  4494  4867 I ParkDebug:   delivered-for-deadline markers: normal=null urgent=null rppNormal=null rppUrgent=null
+09-20 19:39:21.811  4494  4867 I ParkDebug:   expected alarm: car 1 sweep reminder at 2026-10-01T05:00 PT (1790856000000)
+09-20 19:39:21.812  4494  4867 I ParkDebug:   expected alarm: car 1 sweep URGENT reminder at 2026-10-01T06:45 PT (1790862300000)
+09-20 19:39:21.812  4494  4867 I ParkDebug:   expected alarm: car 1 sweep roll-forward at 2026-10-01T07:00 PT (1790863200000)
+09-20 19:39:21.813  4494  4867 I ParkDebug:   rpp: regulation=3032 zone=L days=M-F 800-1800 hrLimit=2.0 limitAssumed=null deadline=2026-09-21T10:00 markers(n/u)=null/null
+09-20 19:39:21.813  4494  4867 I ParkDebug:   expected alarm: car 1 RPP reminder at 2026-09-21T08:00 PT (1790002800000)
+09-20 19:39:21.813  4494  4867 I ParkDebug:   expected alarm: car 1 RPP URGENT reminder at 2026-09-21T09:45 PT (1790009100000)
+09-20 19:39:21.813  4494  4867 I ParkDebug:   expected alarm: car 1 RPP roll-forward at 2026-09-21T18:00 PT (1790038800000)
+09-20 19:39:21.813  4494  4867 I ParkDebug: DUMP_STATE end: the app expects 6 future alarm(s) for 1 parked car(s)

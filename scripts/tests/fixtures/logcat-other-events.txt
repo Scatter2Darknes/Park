@@ -1,0 +1,21 @@
+09-20 19:40:01.100  1234  1250 D Park    : BootReceiver: BOOT_COMPLETED — re-arming reminders
+09-20 19:40:01.400  1234  1251 D Park    : Recomputed sweep deadline for car 1: 1790856000000 -> 1791460800000
+09-20 19:40:01.500  1234  1251 W Park    : Exact alarm permission not granted — NORMAL reminder scheduled as an inexact fallback (may be late)
+09-20 19:40:01.510  1234  1251 W Park    : Exact alarm permission not granted — URGENT reminder scheduled as an inexact fallback (may be late)
+09-20 19:40:02.000  1234  1252 D Park    : ScheduleRollForwardReceiver: SWEEP deadline passed for car 1 — rolling forward
+09-20 19:41:10.200  1234  1260 D DataSF  : Stale-segment cleanup removed 812 rows (fetched 37878, had 38690)
+09-20 19:41:30.300  1234  1261 D RppSync : Stale-RPP cleanup removed 5 rows (fetched 6502, had 6507)
+09-20 19:41:31.300  1234  1261 W DataSF  : Skipping stale-segment cleanup: sync returned 2000 rows but 37878 were stored (under 50%) — looks truncated
+09-20 19:45:00.000  1234  1270 D Tunnel  : SUSPECTED: gap=25000ms lastSpeed=15.0m/s sinceRegain=nullms -> dimming
+09-20 19:45:40.000  1234  1271 D Tunnel  : REGAINED after a 40000ms gap
+09-20 19:46:00.000  1234  1272 D Tunnel  : gap=30000ms lastSpeed=0.0m/s sinceRegain=nullms -> NOT dimming (speed gate or regain cooldown)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: FATAL EXCEPTION: DefaultDispatcher-worker-2
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: Process: com.example.park, PID: 1234
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: java.lang.IllegalStateException: boom — something went wrong
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at com.example.park.NotificationSchedulerKt.armParkedState(NotificationScheduler.kt:530)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at com.example.park.NotificationSchedulerKt.rearmAllActiveReminders(NotificationScheduler.kt:663)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at kotlinx.coroutines.internal.LimitedDispatcher.run(LimitedDispatcher.kt:42)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1119)
+09-20 19:50:00.000  1234  1280 E AndroidRuntime: 	at java.lang.Thread.run(Thread.java:1120)
+09-20 19:50:01.000  1234  1300 D Park    : an unrelated line after the crash
