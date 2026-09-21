@@ -213,15 +213,45 @@ def run_check(adb: Adb, mode: str) -> int:
     return report(outcome, "force-stop and relaunch" if mode == "foreground" else "reboot")
 
 
+SCENARIO_ALARM_TIMEOUT = 20.0
+
+
+def apply_scenario(adb: Adb, scenario: Optional[str], car_id: int, lat: float, lng: float) -> None:
+    """Set the scene with the debug receiver (emulator only) so the check can run unattended.
+
+    park    parks the car at lat/lng via the normal save path and waits for its alarms to appear, so the check has
+            something to re-arm - no tapping through the UI.
+    unpark  clears the car first; the check then stops with the 'park a car first' precondition (exit 2).
+    """
+    if scenario is None:
+        return
+    import debug_hooks  # only needed for scenarios, and only meaningful with a debug build
+    if scenario == "park":
+        print(f"Scenario: parking car {car_id} at {lat},{lng} ...")
+        debug_hooks.park(adb, car_id, lat, lng)
+        if not poll_until(lambda: bool(live_keys(adb)), SCENARIO_ALARM_TIMEOUT, interval=1):
+            raise PreconditionFailed("The car was parked but no alarms appeared (is its next sweep so close that every "
+                                     "reminder is already due?). Try another point with --lat/--lng.")
+    elif scenario == "unpark":
+        print(f"Scenario: unparking car {car_id} ...")
+        debug_hooks.unpark(adb, car_id)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     setup_console()
     parser = argparse.ArgumentParser(description="Check that Park re-arms its alarms (boot or foreground).")
     parser.add_argument("--mode", required=True, choices=["foreground", "boot"])
     parser.add_argument("--device", "-d", help="serial of the device (default: the one running emulator)")
     parser.add_argument("--adb", help="path to adb.exe")
+    parser.add_argument("--scenario", choices=["park", "unpark"],
+                        help="first set the scene through the debug receiver (emulator + debug build only)")
+    parser.add_argument("--car-id", type=int, default=1, help="car for --scenario (default 1)")
+    parser.add_argument("--lat", type=float, default=37.7802, help="latitude for --scenario park (default: 3rd Avenue, SF)")
+    parser.add_argument("--lng", type=float, default=-122.4610, help="longitude for --scenario park")
     args = parser.parse_args(argv)
     try:
         adb = connect(args.adb, args.device)
+        apply_scenario(adb, args.scenario, args.car_id, args.lat, args.lng)
         return run_check(adb, args.mode)
     except PreconditionFailed as exc:
         print(f"PRECONDITION: {exc}", file=sys.stderr)

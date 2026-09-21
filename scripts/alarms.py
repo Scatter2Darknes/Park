@@ -68,7 +68,8 @@ class Alarm:
     inexact: Optional[bool] = None     # True / False, or None when it can't be told
     inexact_source: str = "unknown"    # "live window", "history WL", "unknown"
     kind: str = ""                     # reminder / roll-forward / <receiver>
-    minutes_before_roll: Optional[int] = None   # for reminders: how long before the sweep-start roll-forward alarm
+    minutes_before_roll: Optional[int] = None   # for reminders: how long before the (nearest) roll-forward alarm
+    roll_ambiguous: bool = False                # True when several roll-forward alarms exist, so "nearest" may be the wrong family
     raw_lines: List[str] = field(default_factory=list)
 
     @property
@@ -189,6 +190,9 @@ def _classify(alarms: List[Alarm], history: List[HistoryEntry]) -> None:
             after = [r for r in rolls if r >= alarm.when_ms]
             if after:
                 alarm.minutes_before_roll = -round((after[0] - alarm.when_ms) / 60_000)
+                # A car can have a sweep AND an RPP roll-forward alarm; a dump doesn't say which is which, so with more
+                # than one the nearest may belong to the other family (RPP's fires at the window's close, not sweep start).
+                alarm.roll_ambiguous = len(rolls) > 1
 
 
 # ---------------------------------------------------------------------------------------------
@@ -289,11 +293,17 @@ def render_table(alarms: List[Alarm], local_tz: str) -> str:
     rows = [("#", "kind", "receiver", "due (San Francisco)", "due (device time)" + (" = SF" if same_zone else f" [{local_tz}]"),
              "vs sweep", "timing")]
     for a in sorted(alarms, key=lambda x: (x.when_ms, x.number)):
-        vs = f"{a.minutes_before_roll} min" if a.minutes_before_roll is not None else ("sweep start" if a.kind == "roll-forward" else "")
+        vs = (f"{a.minutes_before_roll} min" + ("*" if a.roll_ambiguous else "")) if a.minutes_before_roll is not None \
+            else ("sweep start" if a.kind == "roll-forward" else "")
         timing = {True: "INEXACT", False: "exact", None: "window unknown"}[a.inexact]
         rows.append((str(a.number), a.kind, a.receiver, format_time(a.when_ms, SF_TZ_NAME), format_time(a.when_ms, local_tz), vs, timing))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
-    return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(r)).rstrip() for r in rows)
+    table = "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(r)).rstrip() for r in rows)
+    if any(a.roll_ambiguous and a.minutes_before_roll is not None for a in alarms):
+        table += ("\n* More than one roll-forward alarm exists (a sweep one, at the sweep's start, and an RPP one, at the end of the "
+                  "RPP window), and the dump can't say which is which. These minutes are measured to the NEAREST one, so they may "
+                  "refer to the other family.")
+    return table
 
 
 def to_json(result: ParseResult, permissions: Permissions, local_tz: str) -> dict:
@@ -305,7 +315,7 @@ def to_json(result: ParseResult, permissions: Permissions, local_tz: str) -> dic
             {
                 "number": a.number, "kind": a.kind, "receiver": a.receiver, "due_epoch_ms": a.when_ms,
                 "due_sf": format_time(a.when_ms, SF_TZ_NAME), "due_local": format_time(a.when_ms, local_tz),
-                "minutes_before_sweep": a.minutes_before_roll, "inexact": a.inexact, "inexact_source": a.inexact_source,
+                "minutes_before_sweep": a.minutes_before_roll, "minutes_approximate": a.roll_ambiguous, "inexact": a.inexact, "inexact_source": a.inexact_source,
                 "exact_allow_reason": a.exact_reason, "pending_intent_id": a.pi_id,
             }
             for a in sorted(result.alarms, key=lambda x: (x.when_ms, x.number))

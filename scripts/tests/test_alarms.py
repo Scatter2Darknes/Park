@@ -62,6 +62,24 @@ class EmulatorFormatTest(unittest.TestCase):
         self.assertTrue(first.inexact)
         self.assertEqual(3_600_000, first.window_ms)
 
+    def test_minutes_are_flagged_approximate_when_there_are_several_roll_forward_alarms(self):
+        """A sweep AND an RPP roll-forward alarm can coexist; the dump can't say which a reminder belongs to."""
+        second_roll = EMULATOR.replace("1790863200000", "1790900000000").replace("50ab261", "beef123")             .replace("origWhen=2026-10-01 07:00:00.000", "origWhen=2026-10-01 17:13:20.000")
+        # Give the second copy a different alarm number so it is a distinct entry, and append it.
+        second_roll = second_roll.replace("#48:", "#58:")
+        result = alarms.parse_dumpsys_alarm(EMULATOR + "\n" + second_roll)
+        rolls = [a for a in result.alarms if a.kind == "roll-forward"]
+        self.assertEqual(2, len(rolls))
+        reminders = [a for a in result.alarms if a.kind == "reminder" and a.minutes_before_roll is not None]
+        self.assertTrue(reminders and all(a.roll_ambiguous for a in reminders))
+        table = alarms.render_table(result.alarms, alarms.SF_TZ_NAME)
+        self.assertIn("min*", table)
+        self.assertIn("More than one roll-forward alarm exists", table)
+
+    def test_a_single_roll_forward_alarm_means_the_minutes_are_exact_and_carry_no_footnote(self):
+        table = alarms.render_table(alarms.parse_dumpsys_alarm(EMULATOR).alarms, alarms.SF_TZ_NAME)
+        self.assertNotIn("*", table)
+
     def test_summary_line(self):
         summary = alarms.summarize(self.result.alarms, alarms.Permissions(exact_alarm="allow"))
         self.assertEqual("3 live alarms; next: Thu 2026-10-01 05:00 PT; inexact: no; exact permission: allow", summary)

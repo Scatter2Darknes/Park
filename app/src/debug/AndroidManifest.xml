@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILDS ONLY. This file lives in app/src/debug/, so Gradle merges it into the debug variant's manifest and
+  never into release. It registers DebugControlReceiver (app/src/debug/java/.../DebugControlReceiver.kt), which
+  lets scripts park/unpark/re-arm/dump state over `adb shell am broadcast`. It is exported so adb can reach it,
+  which is exactly why it must not ship: scripts/check_release_manifest.py verifies a release APK has no trace of it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".DebugControlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.park.debug.DUMP_STATE" />
+                <action android:name="com.example.park.debug.PARK" />
+                <action android:name="com.example.park.debug.UNPARK" />
+                <action android:name="com.example.park.debug.REARM" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
