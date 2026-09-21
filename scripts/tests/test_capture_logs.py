@@ -3,7 +3,9 @@
 Fixtures (tests/fixtures/):
   logcat-emulator.txt      a REAL capture from the emulator: a PARK, a REARM and a DUMP_STATE through the debug receiver.
   logcat-other-events.txt  lines in the app's actual log formats (copied from the source) for events the emulator
-                           run didn't produce: boot, stale-row cleanup, exact-alarm warnings, tunnel decisions, a crash.
+                           run didn't produce: boot, stale-row cleanup, exact-alarm warnings, notifications blocked
+                           (the message text is what the app logged on the emulator with the channel switched off),
+                           tunnel decisions, a crash.
 
 Run:  python -m unittest discover -s scripts/tests -v
 """
@@ -69,6 +71,17 @@ class OtherEventsDigestTest(unittest.TestCase):
         self.assertEqual(3, self.digest.counts["Stale-row cleanup"])
         self.assertEqual(2, self.digest.counts["Exact-alarm permission"])
         self.assertEqual(3, self.digest.counts["Tunnel decisions"])
+        self.assertEqual(2, self.digest.counts["Notifications blocked"])   # the detail line after each one is not counted
+
+    def test_notifications_blocked_lines_are_counted_and_shown(self):
+        text = capture_logs.render_digest(self.digest)
+        self.assertIn("Notifications blocked: 2", text)
+        self.assertIn("notifications blocked — reminder not shown", text)
+
+    def test_notifications_blocked_is_zero_and_still_listed_when_it_never_happened(self):
+        digest = capture_logs.build_digest(EMULATOR)
+        self.assertEqual(0, digest.counts["Notifications blocked"])
+        self.assertIn("Notifications blocked: 0", capture_logs.render_digest(digest))
 
     def test_stale_cleanup_totals_are_summed_per_tag(self):
         self.assertEqual({"segment": 812, "RPP": 5}, self.digest.cleanup_totals)

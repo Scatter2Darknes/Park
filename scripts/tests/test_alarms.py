@@ -4,6 +4,10 @@ Fixtures:
   dumpsys-alarm-emulator.txt    a REAL capture from the emulator (Android 17): three Park alarms (reminder -120, urgent
                                 -15, roll-forward), each with the extra `type=... window=0 exactAllowReason=permission`
                                 line, plus other apps' alarms that must be ignored.
+  dumpsys-package-notifications-granted.txt / -denied.txt
+                                the POST_NOTIFICATIONS part of `dumpsys package com.example.park`. The runtime line is REAL
+                                (emulator, Android 17); the denied one changes only granted=true to granted=false, which is
+                                the exact line the owner's S25 printed (flags USER_SET|USER_SENSITIVE_WHEN_GRANTED|...).
   dumpsys-alarm-s25-format.txt  the phone's format, RECONSTRUCTED from the appendix of docs/Automation_plan.md (real lines
                                 from the owner's S25) plus a third alarm and a history block: no `type=` line per alarm,
                                 so inexact/exact has to come from the history's WL= value.
@@ -11,18 +15,26 @@ Fixtures:
 Run:  python -m unittest discover -s scripts/tests -v
 """
 
+import contextlib
+import io
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import alarms  # noqa: E402
+from common import Adb, Result  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 EMULATOR = (FIXTURES / "dumpsys-alarm-emulator.txt").read_text(encoding="utf-8")
 S25 = (FIXTURES / "dumpsys-alarm-s25-format.txt").read_text(encoding="utf-8")
+PACKAGE_GRANTED = (FIXTURES / "dumpsys-package-notifications-granted.txt").read_text(encoding="utf-8")
+PACKAGE_DENIED = (FIXTURES / "dumpsys-package-notifications-denied.txt").read_text(encoding="utf-8")
+S25_DENIED_LINE = ("android.permission.POST_NOTIFICATIONS: granted=false, "
+                   "flags=[ USER_SET|USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]")
 
 
 class EmulatorFormatTest(unittest.TestCase):
@@ -198,13 +210,108 @@ class OutputTest(unittest.TestCase):
         json.dumps(data)  # serialisable
         self.assertEqual(3, len(data["alarms"]))
         self.assertEqual([-120, -15, None], [a["minutes_before_sweep"] for a in data["alarms"]])
-        self.assertEqual({"exact_alarm": "allow", "notifications": "allow"}, data["permissions"])
+        self.assertEqual({"exact_alarm": "allow", "notifications": "allow", "notifications_blocked": False}, data["permissions"])
 
     def test_table_labels_the_timing(self):
         table = alarms.render_table(alarms.parse_dumpsys_alarm(S25).alarms, alarms.SF_TZ_NAME)
         self.assertIn("INEXACT", table)
         self.assertIn("-120 min", table)
         self.assertIn("sweep start", table)
+
+
+class NotificationsPermissionTest(unittest.TestCase):
+    """Reminders are notifications: with them blocked, alarms fire and nothing is shown. The runtime grant in
+    `dumpsys package` is the primary source on Android 13+ (appops just says "ignore")."""
+
+    def test_reads_the_grant_from_a_real_package_dump(self):
+        self.assertIs(True, alarms.parse_notification_grant(PACKAGE_GRANTED))
+        self.assertIs(False, alarms.parse_notification_grant(PACKAGE_DENIED))
+
+    def test_reads_the_exact_line_from_the_owners_s25(self):
+        self.assertIs(False, alarms.parse_notification_grant("      runtime permissions:\n        " + S25_DENIED_LINE))
+        self.assertIs(True, alarms.parse_notification_grant(S25_DENIED_LINE.replace("granted=false", "granted=true")))
+
+    def test_the_requested_permissions_list_alone_is_not_an_answer(self):
+        only_requested = "    requested permissions:\n      android.permission.POST_NOTIFICATIONS\n"
+        self.assertIsNone(alarms.parse_notification_grant(only_requested))
+        self.assertIsNone(alarms.parse_notification_grant(""))
+
+    def test_android_13_plus_trusts_the_grant_over_appops(self):
+        # appops printed "ignore" on the S25 - correct but cryptic; the grant says what it means.
+        self.assertEqual(("deny", "dumpsys package"), alarms.resolve_notifications(36, False, "ignore"))
+        self.assertEqual(("deny", "dumpsys package"), alarms.resolve_notifications(33, False, "allow"))
+        self.assertEqual(("allow", "dumpsys package"), alarms.resolve_notifications(36, True, "unknown"))
+
+    def test_older_android_and_missing_grant_fall_back_to_appops(self):
+        self.assertEqual(("ignore", "appops"), alarms.resolve_notifications(30, None, "ignore"))
+        self.assertEqual(("allow", "appops"), alarms.resolve_notifications(36, None, "allow"))
+        # Below Android 13 the permission isn't a runtime one, so a grant line (if one ever appeared) is not trusted.
+        self.assertEqual(("allow", "appops"), alarms.resolve_notifications(29, False, "allow"))
+
+    def test_an_unknown_sdk_still_trusts_a_grant_line(self):
+        self.assertEqual(("deny", "dumpsys package"), alarms.resolve_notifications(None, False, "unknown"))
+
+    def test_nothing_known_is_unknown_not_blocked(self):
+        self.assertEqual(("unknown", "unknown"), alarms.resolve_notifications(36, None, "unknown"))
+        self.assertFalse(alarms.Permissions().notifications_blocked)
+
+    def test_which_states_count_as_blocked(self):
+        for state in ("deny", "ignore"):
+            self.assertTrue(alarms.Permissions("allow", state).notifications_blocked, state)
+        for state in ("allow", "default", "foreground", "unknown"):
+            self.assertFalse(alarms.Permissions("allow", state).notifications_blocked, state)
+
+
+class NotificationsReportTest(unittest.TestCase):
+    """The whole flow through read_permissions and main(), with a fake device standing in for adb."""
+
+    class FakeDevice(Adb):
+        def __init__(self, package_dump, notif_appop, sdk="36"):
+            super().__init__("adb", "emulator-5554")
+            self.package_dump, self.notif_appop, self.sdk = package_dump, notif_appop, sdk
+
+        def shell(self, command, allow_fail=False, timeout=120):
+            if command.startswith("appops get") and "SCHEDULE_EXACT_ALARM" in command:
+                return Result(0, "Uid mode: SCHEDULE_EXACT_ALARM: allow\n", "")
+            if command.startswith("appops get") and "POST_NOTIFICATION" in command:
+                return Result(0, self.notif_appop, "")
+            if command.startswith("dumpsys package"):
+                return Result(0, self.package_dump, "")
+            if command.startswith("getprop ro.build.version.sdk"):
+                return Result(0, self.sdk + "\n", "")
+            if command.startswith("getprop"):
+                return Result(0, "America/Los_Angeles\n", "")
+            if command.startswith("dumpsys alarm"):
+                return Result(0, EMULATOR, "")
+            raise AssertionError(f"unexpected command: {command}")
+
+    def run_main(self, device):
+        out = io.StringIO()
+        with unittest.mock.patch.object(alarms, "connect", return_value=device), contextlib.redirect_stdout(out):
+            self.assertEqual(0, alarms.main([]))
+        return out.getvalue()
+
+    def test_blocked_prints_the_loud_warning_and_names_the_source(self):
+        text = self.run_main(self.FakeDevice(PACKAGE_DENIED, "Uid mode: POST_NOTIFICATION: ignore\n"))
+        self.assertIn("notifications permission: deny (from dumpsys package)", text)
+        self.assertIn("WARNING: notifications are BLOCKED", text)
+        self.assertIn("reminders will not be shown", text)
+
+    def test_allowed_prints_no_warning(self):
+        text = self.run_main(self.FakeDevice(PACKAGE_GRANTED, "No operations.\n"))
+        self.assertIn("notifications permission: allow (from dumpsys package)", text)
+        self.assertNotIn("WARNING", text)
+
+    def test_old_android_uses_appops_and_still_warns_when_ignored(self):
+        text = self.run_main(self.FakeDevice("", "Uid mode: POST_NOTIFICATION: ignore\n", sdk="30"))
+        self.assertIn("notifications permission: ignore (from appops)", text)
+        self.assertIn("WARNING: notifications are BLOCKED", text)
+
+    def test_json_carries_the_blocked_flag(self):
+        permissions = alarms.read_permissions(self.FakeDevice(PACKAGE_DENIED, "Uid mode: POST_NOTIFICATION: ignore\n"))
+        data = alarms.to_json(alarms.parse_dumpsys_alarm(EMULATOR), permissions, alarms.SF_TZ_NAME)
+        self.assertEqual("deny", data["permissions"]["notifications"])
+        self.assertTrue(data["permissions"]["notifications_blocked"])
 
 
 if __name__ == "__main__":

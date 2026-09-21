@@ -11,7 +11,8 @@ car names - don't share it). It contains the app's own tags - Park, RppSync, Dat
 plus AndroidRuntime, followed by Android's crash buffer.
 
 The digest pulls out, with counts: parking saves, re-arm / recompute / roll-forward lines, BootReceiver, the
-stale-row cleanup results ("... removed N rows", both tags), exact-alarm-permission warnings, Tunnel decisions, and any
+stale-row cleanup results ("... removed N rows", both tags), exact-alarm-permission warnings, "notifications blocked -
+reminder not shown" (Android is dropping the reminders), Tunnel decisions, and any
 AndroidRuntime exception with its first stack lines. It is computed from the same text that is saved, so it always
 matches the file.
 
@@ -50,6 +51,9 @@ CATEGORIES = [
     Category("BootReceiver", lambda tag, msg: "BootReceiver" in msg),
     Category("Stale-row cleanup", lambda tag, msg: bool(re.search(r"Stale-(segment|RPP) cleanup|Skipping stale-", msg, re.I))),
     Category("Exact-alarm permission", lambda tag, msg: "Exact alarm permission not granted" in msg or "inexact fallback" in msg),
+    # NotificationHelper.showReminder logs this when notifications (or the reminder channel) are blocked: the alarm fired,
+    # but Android would drop the notification, so nobody saw a reminder.
+    Category("Notifications blocked", lambda tag, msg: bool(re.search(r"notifications blocked\s+\S+\s+reminder not shown", msg))),
     Category("Tunnel decisions", lambda tag, msg: tag == "Tunnel"),
 ]
 

@@ -2,6 +2,9 @@
 09-20 19:40:01.400  1234  1251 D Park    : Recomputed sweep deadline for car 1: 1790856000000 -> 1791460800000
 09-20 19:40:01.500  1234  1251 W Park    : Exact alarm permission not granted — NORMAL reminder scheduled as an inexact fallback (may be late)
 09-20 19:40:01.510  1234  1251 W Park    : Exact alarm permission not granted — URGENT reminder scheduled as an inexact fallback (may be late)
+09-20 19:40:03.100  1234  1253 W Park    : notifications blocked — reminder not shown
+09-20 19:40:03.101  1234  1253 W Park    : showReminder: notificationId=999001 NOT shown — permissionGranted=false areNotificationsEnabled=false channel=parking_reminders importance=3
+09-20 19:40:04.200  1234  1254 W Park    : notifications blocked — reminder not shown
 09-20 19:40:02.000  1234  1252 D Park    : ScheduleRollForwardReceiver: SWEEP deadline passed for car 1 — rolling forward
 09-20 19:41:10.200  1234  1260 D DataSF  : Stale-segment cleanup removed 812 rows (fetched 37878, had 38690)
 09-20 19:41:30.300  1234  1261 D RppSync : Stale-RPP cleanup removed 5 rows (fetched 6502, had 6507)

@@ -48,7 +48,7 @@ python scripts\alarms.py --raw              # also the raw dumpsys lines it read
 python scripts\alarms.py --file saved.txt   # parse a saved dumpsys instead of asking a device
 ```
 
-Shows each live alarm of the app: `reminder` or `roll-forward` (by receiver), when it is due in San Francisco time and device time, the minutes before the sweep for reminders, and whether Android will fire it **exactly or INEXACTLY** (the sign that exact alarms are denied). Also the exact-alarm and notification permissions. It understands two dump formats: newer builds print a `window=` line per alarm (a plain `0` for exact, a duration like `+1h0m0s0ms` for inexact); the phone's format has none, so it reads the alarm history (`WL=` on the entry with the same PendingIntent id, taking the latest by `rtc=` time). Anything it can't parse is listed raw instead of failing. When a car has both a sweep and an RPP roll-forward alarm, the "minutes before" figures carry a `*`: the dump can't say which roll-forward belongs to which reminder, so they are measured to the nearest one and may refer to the other.
+Shows each live alarm of the app: `reminder` or `roll-forward` (by receiver), when it is due in San Francisco time and device time, the minutes before the sweep for reminders, and whether Android will fire it **exactly or INEXACTLY** (the sign that exact alarms are denied). Also the exact-alarm and notification permissions. **Notifications** are read from `dumpsys package com.example.park` (`POST_NOTIFICATIONS: granted=`) on Android 13+, because `appops` only says a cryptic `ignore` (or nothing at all) for a denied app; older Android falls back to `appops`. The output says which source it used, e.g. `notifications permission: deny (from dumpsys package)`, and when they are blocked it prints `WARNING: notifications are BLOCKED — reminders will not be shown` (the alarms still fire, but Android drops every notification, so a parked car gets no reminder at all); `--json` carries `notifications_blocked`. This reads the app-level permission only: if just one notification channel is switched off, `alarms.py` can't see it, but the app's own map banner, the debug `dump` line (`notifications: ... remindersChannelImportance=0`) and the digest below do. It understands two dump formats: newer builds print a `window=` line per alarm (a plain `0` for exact, a duration like `+1h0m0s0ms` for inexact); the phone's format has none, so it reads the alarm history (`WL=` on the entry with the same PendingIntent id, taking the latest by `rtc=` time). Anything it can't parse is listed raw instead of failing. When a car has both a sweep and an RPP roll-forward alarm, the "minutes before" figures carry a `*`: the dump can't say which roll-forward belongs to which reminder, so they are measured to the nearest one and may refer to the other.
 
 **`rearm_check.py`** (A4) - does the app re-arm its alarms?
 
@@ -69,7 +69,7 @@ python scripts\capture_logs.py --follow               # stream live until Ctrl+C
 python scripts\capture_logs.py --from-file logs\old.txt   # digest a saved file
 ```
 
-Captures the app's tags (Park, RppSync, DataSF, Tunnel, AndroidRuntime, plus ParkBluetooth and ParkDebug) and Android's crash buffer, as UTF-8. The digest counts and quotes: parking saves, re-arm / recompute / roll-forward lines, `BootReceiver`, the stale-row cleanup results (with per-tag totals), exact-alarm warnings, `Tunnel` decisions, and any crash with its first stack lines. Logcat's buffer is small and a reboot clears it, so capture soon after the event.
+Captures the app's tags (Park, RppSync, DataSF, Tunnel, AndroidRuntime, plus ParkBluetooth and ParkDebug) and Android's crash buffer, as UTF-8. The digest counts and quotes: parking saves, re-arm / recompute / roll-forward lines, `BootReceiver`, the stale-row cleanup results (with per-tag totals), exact-alarm warnings, `Notifications blocked` (a count of the app's `notifications blocked — reminder not shown` warning: a reminder went off but Android would not show it, whether the whole app or just the reminders channel is blocked), `Tunnel` decisions, and any crash with its first stack lines. Logcat's buffer is small and a reboot clears it, so capture soon after the event.
 
 **`debug_hooks.py`** (A6) - drive the app without the UI, through `DebugControlReceiver` (`app/src/debug/`, which only exists in **debug** builds).
 
@@ -80,7 +80,7 @@ python scripts\debug_hooks.py unpark --car-id 1
 python scripts\debug_hooks.py rearm                                       # the re-arm BootReceiver runs
 ```
 
-`park` goes through the normal `saveParkedState` path. `dump` lists the alarms the app expects, which should match `alarms.py`'s live list (checked on the emulator: 6 expected, 6 live, same times). Replies come back through Logcat (tag `ParkDebug`). `dump` only reads; `park`, `unpark` and `rearm` change state, so they run on an emulator only. `adb emu geo fix <lon> <lat>` sets the emulator's GPS location if you want to test that too.
+`park` goes through the normal `saveParkedState` path. `dump` lists the alarms the app expects, which should match `alarms.py`'s live list (checked on the emulator: 6 expected, 6 live, same times). Replies come back through Logcat (tag `ParkDebug`). `dump` also prints a `notifications:` line (`notificationsEnabled`, each channel's importance, and `reminderHealth`: `OK`, `NOTIFICATIONS_BLOCKED` or `REMINDER_CHANNEL_BLOCKED`; a channel importance of 0 means it is switched off). On an emulator, `adb shell pm revoke com.example.park android.permission.POST_NOTIFICATIONS` (kills the app, keeps its data) and `pm grant` toggle the app-level block; a single channel is switched off in the system settings page. `dump` only reads; `park`, `unpark` and `rearm` change state, so they run on an emulator only. `adb emu geo fix <lon> <lat>` sets the emulator's GPS location if you want to test that too.
 
 **`check_release_manifest.py`** (A6) - proves a release APK has no debug receiver.
 
@@ -97,7 +97,7 @@ Reads the compiled manifest with the SDK's `aapt2` and searches the compiled cod
 python -m unittest discover -s scripts/tests -v
 ```
 
-They need no device: `test_guard.py` (the safety guard), `test_device_selection.py` (which device gets chosen), `test_backup_db.py`, `test_alarms.py` (against a real emulator capture and an S25-format fixture in `tests/fixtures/`), `test_rearm_check.py`, `test_capture_logs.py`, `test_debug_hooks.py` and `test_check_release_manifest.py`. Each script's logic is tested against a fake device, including the failure paths.
+They need no device: `test_guard.py` (the safety guard), `test_device_selection.py` (which device gets chosen), `test_backup_db.py`, `test_alarms.py` (against a real emulator capture and an S25-format fixture in `tests/fixtures/`, plus `dumpsys package` samples with `granted=true` / `granted=false` for the notification check), `test_rearm_check.py`, `test_capture_logs.py`, `test_debug_hooks.py` and `test_check_release_manifest.py`. Each script's logic is tested against a fake device, including the failure paths.
 
 ## Restoring a backup (manual on purpose)
 

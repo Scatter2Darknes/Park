@@ -235,23 +235,54 @@ def parse_appop(text: str, op: str) -> str:
     return match.group(1).lower() if match else "unknown"
 
 
+ANDROID_13_SDK = 33  # POST_NOTIFICATIONS became a runtime permission here; before, only the appop exists.
+
+NOTIFICATIONS_BLOCKED_WARNING = "WARNING: notifications are BLOCKED — reminders will not be shown"
+
+
 @dataclass
 class Permissions:
     exact_alarm: str = "unknown"
     notifications: str = "unknown"
+    # Where the notifications answer came from: "dumpsys package", "appops" or "unknown" (for the report only).
+    notifications_source: str = "unknown"
+
+    @property
+    def notifications_blocked(self) -> bool:
+        """True when Android will silently drop the app's notifications. Only ever True on a positive reading."""
+        return self.notifications in ("deny", "ignore")
+
+
+def parse_notification_grant(package_dump: str) -> Optional[bool]:
+    """The runtime grant from `dumpsys package <pkg>`: True / False, or None if there is no such line.
+
+    The real line looks like
+        android.permission.POST_NOTIFICATIONS: granted=false, flags=[ USER_SET|USER_SENSITIVE_WHEN_GRANTED|...]
+    (the "requested permissions" list names the permission too, but with no `granted=`, so it never matches).
+    """
+    match = re.search(r"android\.permission\.POST_NOTIFICATIONS:\s*granted=(true|false)", package_dump)
+    return None if match is None else match.group(1) == "true"
+
+
+def resolve_notifications(sdk: Optional[int], grant: Optional[bool], appop: str) -> Tuple[str, str]:
+    """(state, source). On Android 13+ the runtime grant is the real answer: `appops` says "ignore" (cryptic) for a
+    denied app, and has no record at all until something has used the permission. Older versions have only the appop.
+    An unknown SDK still trusts a grant line if one exists, since only Android 13+ prints it."""
+    if grant is not None and (sdk is None or sdk >= ANDROID_13_SDK):
+        return ("allow" if grant else "deny"), "dumpsys package"
+    if appop != "unknown":
+        return appop, "appops"
+    return "unknown", "unknown"
 
 
 def read_permissions(adb: Adb) -> Permissions:
     exact = adb.shell(f"appops get {PACKAGE} SCHEDULE_EXACT_ALARM", allow_fail=True).out
     notif = adb.shell(f"appops get {PACKAGE} POST_NOTIFICATION", allow_fail=True).out
-    permissions = Permissions(parse_appop(exact, "SCHEDULE_EXACT_ALARM"), parse_appop(notif, "POST_NOTIFICATION"))
-    if permissions.notifications == "unknown":
-        # `appops` has no record until something has used the permission; the runtime grant is the real answer.
-        package_dump = adb.shell(f"dumpsys package {PACKAGE}", allow_fail=True, timeout=60).out
-        granted = re.search(r"android\.permission\.POST_NOTIFICATIONS:\s*granted=(true|false)", package_dump)
-        if granted:
-            permissions.notifications = "allow" if granted.group(1) == "true" else "deny"
-    return permissions
+    package_dump = adb.shell(f"dumpsys package {PACKAGE}", allow_fail=True, timeout=60).out
+    sdk_text = (adb.getprop("ro.build.version.sdk") or "").strip()
+    sdk = int(sdk_text) if sdk_text.isdigit() else None
+    state, source = resolve_notifications(sdk, parse_notification_grant(package_dump), parse_appop(notif, "POST_NOTIFICATION"))
+    return Permissions(parse_appop(exact, "SCHEDULE_EXACT_ALARM"), state, source)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -310,7 +341,11 @@ def to_json(result: ParseResult, permissions: Permissions, local_tz: str) -> dic
     return {
         "package": PACKAGE,
         "summary": summarize(result.alarms, permissions),
-        "permissions": {"exact_alarm": permissions.exact_alarm, "notifications": permissions.notifications},
+        "permissions": {
+            "exact_alarm": permissions.exact_alarm,
+            "notifications": permissions.notifications,
+            "notifications_blocked": permissions.notifications_blocked,
+        },
         "alarms": [
             {
                 "number": a.number, "kind": a.kind, "receiver": a.receiver, "due_epoch_ms": a.when_ms,
@@ -357,7 +392,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render_table(result.alarms, local_tz))
     print()
     print(summarize(result.alarms, permissions))
-    print(f"notifications permission: {permissions.notifications}")
+    source = "" if permissions.notifications_source == "unknown" else f" (from {permissions.notifications_source})"
+    print(f"notifications permission: {permissions.notifications}{source}")
+    if permissions.notifications_blocked:
+        print(NOTIFICATIONS_BLOCKED_WARNING)
     if result.unparsed:
         print("\nLines that mention the app but weren't understood (shown raw):")
         for line in result.unparsed:
