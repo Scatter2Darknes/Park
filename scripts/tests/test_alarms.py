@@ -4,6 +4,15 @@ Fixtures:
   dumpsys-alarm-emulator.txt    a REAL capture from the emulator (Android 17): three Park alarms (reminder -120, urgent
                                 -15, roll-forward), each with the extra `type=... window=0 exactAllowReason=permission`
                                 line, plus other apps' alarms that must be ignored.
+  dumpsys-alarm-api29-emulator.txt
+                                a REAL, unedited capture of `adb shell dumpsys alarm` from the API 29 (Android 10) emulator
+                                with one car parked. Header `RTC_WAKEUP #0: Alarm{id type 0 when <ms> pkg}`, every alarm
+                                numbered #0, `window=0` on its own line, no origWhen. It also holds the platform's
+                                ACTION_FORCE_STOP_RESCHEDULE placeholder filed under com.example.park (not one of ours) and
+                                other apps' alarms.
+  debug-dump-api29-emulator.txt
+                                `debug_hooks.py dump` taken at the same moment: the alarms the app says it expects. The
+                                parser test requires the fixture to yield exactly the future ones.
   dumpsys-package-notifications-granted.txt / -denied.txt
                                 the POST_NOTIFICATIONS part of `dumpsys package com.example.park`. The runtime line is REAL
                                 (emulator, Android 17); the denied one changes only granted=true to granted=false, which is
@@ -18,7 +27,9 @@ Run:  python -m unittest discover -s scripts/tests -v
 import contextlib
 import io
 import json
+import re
 import sys
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -31,6 +42,8 @@ from common import Adb, Result  # noqa: E402
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 EMULATOR = (FIXTURES / "dumpsys-alarm-emulator.txt").read_text(encoding="utf-8")
 S25 = (FIXTURES / "dumpsys-alarm-s25-format.txt").read_text(encoding="utf-8")
+API29 = (FIXTURES / "dumpsys-alarm-api29-emulator.txt").read_text(encoding="utf-8")
+API29_APP_DUMP = (FIXTURES / "debug-dump-api29-emulator.txt").read_text(encoding="utf-8")
 PACKAGE_GRANTED = (FIXTURES / "dumpsys-package-notifications-granted.txt").read_text(encoding="utf-8")
 PACKAGE_DENIED = (FIXTURES / "dumpsys-package-notifications-denied.txt").read_text(encoding="utf-8")
 S25_DENIED_LINE = ("android.permission.POST_NOTIFICATIONS: granted=false, "
@@ -145,6 +158,118 @@ class S25FormatTest(unittest.TestCase):
             "3 live alarms; next: Tue 2026-09-22 06:00 PT; inexact: yes; exact permission: deny",
             alarms.summarize(self.result.alarms, alarms.Permissions(exact_alarm="deny")),
         )
+
+
+def expected_alarm_keys(app_dump: str):
+    """(receiver, due-ms) of every FUTURE alarm listed by `debug_hooks.py dump` ('expected alarm: car 1 <label> at <time> PT (<ms>)')."""
+    keys = set()
+    for line in app_dump.splitlines():
+        found = re.search(r"expected alarm: car \d+ (.+?) at \S+ PT \((\d+)\)(.*)$", line)
+        if found and "already in the past" not in found.group(3):
+            receiver = "ScheduleRollForwardReceiver" if "roll-forward" in found.group(1) else "ParkingReminderReceiver"
+            keys.add((receiver, int(found.group(2))))
+    return keys
+
+
+class Api29FormatTest(unittest.TestCase):
+    """Android 10 (API 29): every alarm is numbered #0 and there is no origWhen line - the format that made rearm_check
+    see 'no alarms' although five were live."""
+
+    def setUp(self):
+        self.result = alarms.parse_dumpsys_alarm(API29)
+
+    def test_it_finds_every_alarm_the_app_says_it_expects(self):
+        self.assertIn("the app expects 5 future alarm(s)", API29_APP_DUMP)
+        expected = expected_alarm_keys(API29_APP_DUMP)
+        self.assertEqual(5, len(expected))
+        self.assertEqual(expected, {a.key for a in self.result.alarms})
+        self.assertEqual(5, len(self.result.alarms))
+
+    def test_nothing_is_left_unread(self):
+        self.assertEqual([], self.result.unparsed)
+
+    def test_the_platforms_force_stop_placeholder_is_not_counted_as_an_alarm_of_the_app(self):
+        self.assertIn("ACTION_FORCE_STOP_RESCHEDULE", API29)
+        self.assertIn("2105386570751", API29)   # its due time (year 2036), filed under com.example.park
+        self.assertNotIn(2105386570751, [a.when_ms for a in self.result.alarms])
+
+    def test_kinds_and_exactness(self):
+        kinds = sorted(a.kind for a in self.result.alarms)
+        self.assertEqual(["reminder", "reminder", "reminder", "roll-forward", "roll-forward"], kinds)
+        for alarm in self.result.alarms:
+            self.assertFalse(alarm.inexact, alarm.receiver)   # window=0
+            self.assertEqual("live window", alarm.inexact_source)
+            self.assertTrue(alarm.pi_id)
+
+    def test_other_apps_alarms_are_ignored(self):
+        self.assertIn("com.google.android.gms", API29)
+        self.assertTrue(all(a.receiver in alarms.RECEIVER_KINDS for a in self.result.alarms))
+
+    def test_an_elapsed_clock_alarm_is_reported_not_guessed(self):
+        # In this format `when` of an ELAPSED_* alarm is a clock reading, not a date: it must not become a bogus due time.
+        text = "    ELAPSED_WAKEUP #0: Alarm{aa type 2 when 10873158 com.example.park}\n      tag=*walarm*:com.example.park/.X\n"
+        result = alarms.parse_dumpsys_alarm(text)
+        self.assertEqual([], result.alarms)
+        self.assertEqual(2, len(result.unparsed))
+
+
+class UnparsedIsLoudTest(unittest.TestCase):
+    """A dump the parser can't read must never look like 'no alarms'."""
+
+    UNFAMILIAR = ("    RTC_WAKEUP #9: Alarm{abc newformat com.example.park}\n"
+                  "      tag=*walarm*:com.example.park/.ParkingReminderReceiver\n")
+
+    def test_the_warning_names_the_lines_that_were_not_understood(self):
+        text = alarms.unparsed_warning(alarms.parse_dumpsys_alarm(self.UNFAMILIAR).unparsed)
+        self.assertTrue(text.startswith("WARNING:"))
+        self.assertIn("NOT understood", text)
+        self.assertIn("do not read it as", text)
+        self.assertIn("Alarm{abc newformat com.example.park}", text)
+
+    def test_an_orphan_tag_line_of_the_app_is_not_silently_dropped(self):
+        result = alarms.parse_dumpsys_alarm("      tag=*walarm*:com.example.park/.ParkingReminderReceiver\n")
+        self.assertEqual([], result.alarms)
+        self.assertEqual(1, len(result.unparsed))
+
+    def test_a_long_list_is_shortened_but_still_counted(self):
+        text = alarms.unparsed_warning([f"line {i}" for i in range(25)])
+        self.assertIn("25 line(s)", text)
+        self.assertIn("and 15 more", text)
+
+    def _run_main(self, dump_text, *extra):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "dump.txt"
+            path.write_text(dump_text, encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = alarms.main(["--file", str(path), *extra])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_main_prints_the_warning_and_exits_1(self):
+        code, out, _ = self._run_main(self.UNFAMILIAR)
+        self.assertEqual(1, code)
+        self.assertIn("WARNING:", out)
+        self.assertIn("newformat", out)
+
+    def test_json_mode_also_exits_1_and_warns(self):
+        code, out, err = self._run_main(self.UNFAMILIAR, "--json")
+        self.assertEqual(1, code)
+        self.assertEqual(2, len(json.loads(out)["unparsed_lines"]))   # the unknown header and the tag line under it
+        self.assertIn("WARNING:", err)
+
+    def test_a_fully_understood_dump_exits_0_without_a_warning(self):
+        for fixture in (EMULATOR, S25, API29):
+            code, out, _ = self._run_main(fixture)
+            self.assertEqual(0, code)
+            self.assertNotIn("WARNING", out)
+
+    def test_fetch_alarms_refuses_instead_of_returning_an_empty_list(self):
+        class Device(Adb):
+            def shell(self, command, allow_fail=False, timeout=120):
+                return Result(0, UnparsedIsLoudTest.UNFAMILIAR, "")
+        with self.assertRaises(alarms.ScriptError) as ctx:
+            alarms.fetch_alarms(Device("adb", "emulator-5554"))
+        self.assertIn("NOT understood", str(ctx.exception))
 
 
 class ToleranceTest(unittest.TestCase):

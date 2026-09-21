@@ -11,8 +11,16 @@ San Francisco time and in the device's own time, how many minutes before the swe
 Android will fire it EXACTLY or inexactly (an exact-alarm permission problem shows up here). It also reports the
 exact-alarm permission and notification permission app-ops.
 
-Android versions format `dumpsys alarm` differently, so parsing is tolerant: anything it can't make sense of is
-listed as a raw line rather than causing a failure. Two formats are understood (see tests/fixtures/):
+Android versions format `dumpsys alarm` differently, so parsing is tolerant: a line it can't make sense of never
+crashes it. But it is never dropped quietly either: every line that mentions the app and wasn't understood is listed
+under a WARNING, `alarms.py` then exits 1, and rearm_check.py stops with an error - a list that may be incomplete must
+never be read as "no alarms". Three formats are understood (see tests/fixtures/):
+  * Android 10 (API 29) has no per-alarm origWhen line and numbers every alarm "#0" inside its batch:
+        RTC_WAKEUP #0: Alarm{c6c036b type 0 when 1790033893903 com.example.park}
+          tag=*walarm*:com.example.park/.ParkingReminderReceiver
+          type=0 expectedWhenElapsed=... when=2026-09-21 16:38:13.903
+          window=0 repeatInterval=0 count=0 flags=0x5
+    `when` in the header is the due time (epoch ms, for RTC alarms) and `window=0` means exact.
   * newer builds add a line per alarm:  type=RTC_WAKEUP origWhen=2026-10-01 05:00:00.000 window=0 exactAllowReason=permission
     -> `window=0` means exact, `window>0` means inexact.
   * older/Samsung builds have no such line, but their alarm HISTORY has entries like
@@ -36,9 +44,10 @@ from common import PACKAGE, Adb, ScriptError, connect, setup_console
 SF_TZ_NAME = "America/Los_Angeles"
 
 # "    RTC_WAKEUP #80: Alarm{e685937 type 0 origWhen 1790082000000 whenElapsed 129897319 com.example.park}"
+# API 29 (no origWhen / whenElapsed): "    RTC_WAKEUP #0: Alarm{c6c036b type 0 when 1790033893903 com.example.park}"
 ALARM_HEADER = re.compile(
     r"^(?P<indent>\s*)(?P<kind>[A-Z_]+)\s+#(?P<num>\d+):\s+Alarm\{(?P<id>\w+)\s+type\s+(?P<type>\d+)\s+"
-    r"origWhen\s+(?P<orig>\d+)\s+whenElapsed\s+(?P<elapsed>\d+)\s+(?P<pkg>[\w.]+)\}"
+    r"(?:origWhen\s+(?P<orig>\d+)\s+whenElapsed\s+(?P<elapsed>\d+)|when\s+(?P<when>\d+))\s+(?P<pkg>[\w.]+)\}"
 )
 TAG_LINE = re.compile(r"\btag=\S*?:?(?P<pkg>[\w.]+)/\.?(?P<receiver>[\w.$]+)")
 # The window is printed as a plain 0 for exact alarms but as a duration like "+1h0m0s0ms" for inexact ones
@@ -46,6 +55,10 @@ TAG_LINE = re.compile(r"\btag=\S*?:?(?P<pkg>[\w.]+)/\.?(?P<receiver>[\w.$]+)")
 NEW_STYLE_LINE = re.compile(r"\btype=\w+\s+origWhen=.*?\bwindow=(?P<window>\S+)(?:\s+exactAllowReason=(?P<reason>\S+))?")
 _DURATION_PART = re.compile(r"(\d+)(ms|d|h|m|s)")
 _UNIT_MS = {"d": 86_400_000, "h": 3_600_000, "m": 60_000, "s": 1_000, "ms": 1}
+# API 29 prints the window on its own line: "      window=0 repeatInterval=0 count=0 flags=0x5"
+OLD_STYLE_WINDOW_LINE = re.compile(r"^\s*window=(?P<window>\S+)\s+repeatInterval=")
+# Bookkeeping alarms Android files under an app's name; they are not the app's reminders.
+PLATFORM_TAGS = ("ACTION_FORCE_STOP_RESCHEDULE",)
 OPERATION_LINE = re.compile(r"PendingIntentRecord\{(?P<pi>\w+)\s")
 HISTORY_LINE = re.compile(r"\[tag=(?P<tag>\S+)\s.*?\bH=PI:(?P<pi>\w+)\b.*?\bWL=(?P<wl>\d+)\b(?P<rest>.*)\]")
 HISTORY_RTC = re.compile(r"\brtc=(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)")
@@ -131,9 +144,17 @@ def parse_dumpsys_alarm(text: str, package: str = PACKAGE) -> ParseResult:
             while j < len(lines) and lines[j].strip() and _indent(lines[j]) > len(header.group("indent")):
                 block.append(lines[j])
                 j += 1
+            if header.group("when") and header.group("kind").startswith("ELAPSED"):
+                # API 29 prints `when` as an elapsed-clock reading for these, not a date; Park only uses RTC alarms.
+                unparsed.extend(block)
+                i = j
+                continue
+            if any(tag in body for body in block[1:] for tag in PLATFORM_TAGS):
+                i = j  # e.g. the placeholder Android sets when the app is force-stopped: consumed, not one of ours
+                continue
             alarm = Alarm(
                 number=int(header.group("num")), alarm_type=header.group("kind"),
-                when_ms=int(header.group("orig")), receiver="unknown", raw_lines=block,
+                when_ms=int(header.group("orig") or header.group("when")), receiver="unknown", raw_lines=block,
             )
             for body in block[1:]:
                 tag = TAG_LINE.search(body)
@@ -143,6 +164,9 @@ def parse_dumpsys_alarm(text: str, package: str = PACKAGE) -> ParseResult:
                 if new_style:
                     alarm.window_ms = parse_window(new_style.group("window"))  # None if unreadable -> falls back to history
                     alarm.exact_reason = new_style.group("reason")
+                old_window = OLD_STYLE_WINDOW_LINE.match(body)
+                if old_window:
+                    alarm.window_ms = parse_window(old_window.group("window"))
                 operation = OPERATION_LINE.search(body)
                 if operation:
                     alarm.pi_id = operation.group("pi")
@@ -154,7 +178,9 @@ def parse_dumpsys_alarm(text: str, package: str = PACKAGE) -> ParseResult:
             i = j
             continue
         if "Alarm{" in line and package in line:
-            unparsed.append(line)  # looks like one of ours but the layout is unfamiliar: show it, don't fail
+            unparsed.append(line)  # looks like one of ours but the layout is unfamiliar: warn about it, don't crash
+        elif re.match(rf"^\s*tag=\S*{re.escape(package)}/", line):
+            unparsed.append(line)  # one of our alarms' tag lines that no header claimed
         hist = HISTORY_LINE.search(line)
         if hist and package in hist.group("tag"):
             rtc = HISTORY_RTC.search(hist.group("rest"))
@@ -293,9 +319,21 @@ def fetch_dumpsys(adb: Adb) -> str:
     return adb.shell("dumpsys alarm", timeout=60).out
 
 
+def unparsed_warning(unparsed: List[str]) -> str:
+    """The loud message for lines that mention the app but weren't understood."""
+    shown = "\n".join("    " + line.strip() for line in unparsed[:10])
+    more = f"\n    ... and {len(unparsed) - 10} more" if len(unparsed) > 10 else ""
+    return (f"WARNING: {len(unparsed)} line(s) mentioning {PACKAGE} in `dumpsys alarm` were NOT understood, so the alarm list "
+            f"may be incomplete - do not read it as \"no alarms\". Unread lines:\n{shown}{more}")
+
+
 def fetch_alarms(adb: Adb) -> ParseResult:
-    """The device's live alarms for the app right now (used by rearm_check.py)."""
-    return parse_dumpsys_alarm(fetch_dumpsys(adb))
+    """The device's live alarms for the app right now (used by rearm_check.py). Refuses to answer when part of the dump
+    wasn't understood: a false "no alarms" is the dangerous direction for this tool."""
+    result = parse_dumpsys_alarm(fetch_dumpsys(adb))
+    if result.unparsed:
+        raise ScriptError(unparsed_warning(result.unparsed))
+    return result
 
 
 def device_timezone(adb: Optional[Adb]) -> str:
@@ -384,9 +422,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
+    exit_code = 1 if result.unparsed else 0   # an incomplete list is a failure, not a quiet success
     if args.json:
         print(json.dumps(to_json(result, permissions, local_tz), indent=2))
-        return 0
+        if result.unparsed:
+            print(unparsed_warning(result.unparsed), file=sys.stderr)
+        return exit_code
 
     if result.alarms:
         print(render_table(result.alarms, local_tz))
@@ -397,14 +438,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if permissions.notifications_blocked:
         print(NOTIFICATIONS_BLOCKED_WARNING)
     if result.unparsed:
-        print("\nLines that mention the app but weren't understood (shown raw):")
-        for line in result.unparsed:
-            print("  " + line.strip())
+        print("\n" + unparsed_warning(result.unparsed))
     if args.raw:
         print("\nRaw lines read:")
         for line in result.raw_lines:
             print(line)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

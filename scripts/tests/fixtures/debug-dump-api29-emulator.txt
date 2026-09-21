@@ -1,0 +1,15 @@
+DUMP_STATE begin: now=2026-09-21T14:58:14.051 PT (1790027894051) exactAlarmsAllowed=true reminderOffsetMin=120 urgentOffsetMin=15
+notifications: notificationsEnabled=true remindersChannelImportance=4 urgentChannelImportance=4 statusChannelImportance=2 reminderHealth=OK
+cars: id=1 name='My Car' permitZones=null
+parked states: 1
+PARKED car=1 'My Car' segment=1601988 curb=155000|R curbRows=1 corridor='03rd Ave' sideConfirmed=true parkedAt=2026-09-21T14:53:13.903 PT (1790027593903)
+sweep: stored=2026-10-01T07:00 PT (1790863200000) recomputedNow=2026-10-01T07:00 PT (1790863200000) notificationScheduled=true
+delivered-for-deadline markers: normal=null urgent=null rppNormal=2026-09-21T16:53:13.903 PT (1790034793903) rppUrgent=null
+expected alarm: car 1 sweep reminder at 2026-10-01T05:00 PT (1790856000000)
+expected alarm: car 1 sweep URGENT reminder at 2026-10-01T06:45 PT (1790862300000)
+expected alarm: car 1 sweep roll-forward at 2026-10-01T07:00 PT (1790863200000)
+rpp: regulation=5775 zone=L days=M-F 800-1800 hrLimit=2.0 limitAssumed=null deadline=2026-09-21T16:53:13.903 markers(n/u)=2026-09-21T16:53:13.903 PT (1790034793903)/null
+expected alarm: car 1 RPP reminder at 2026-09-21T14:53:13.903 PT (1790027593903)  (already in the past - fires immediately or is skipped)
+expected alarm: car 1 RPP URGENT reminder at 2026-09-21T16:38:13.903 PT (1790033893903)
+expected alarm: car 1 RPP roll-forward at 2026-09-21T18:00 PT (1790038800000)
+DUMP_STATE end: the app expects 5 future alarm(s) for 1 parked car(s)
