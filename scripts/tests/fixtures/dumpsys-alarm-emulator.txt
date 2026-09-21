@@ -1,0 +1,35 @@
+Current Alarm Manager state:
+  Pending alarm batches: 12
+    ELAPSED_WAKEUP #45: Alarm{a9b9a62 type 2 origWhen 262096455 whenElapsed 262096455 android}
+      tag=*walarm*:com.android.server.notification.TimeToLiveHelper
+      type=ELAPSED_WAKEUP origWhen=+2d23h58m37s649ms window=0 exactAllowReason=policy_permission repeatInterval=0 count=0 flags=0x9
+      policyWhenElapsed: requester=+2d23h58m37s649ms app_standby=-1m22s349ms device_idle=-- battery_saver=--
+      whenElapsed=+2d23h58m37s649ms maxWhenElapsed=+2d23h58m37s649ms
+      operation=PendingIntent{716c7f3: PendingIntentRecord{e915cb0 android broadcastIntent}}
+      idle-options=Bundle[{android.pendingIntent.backgroundActivityAllowed=2, android:broadcast.temporaryAppAllowlistReasonCode=302, android:broadcast.temporaryAppAllowlistDuration=10000, android:broadcast.temporaryAppAllowlistReason=, android:broadcast.temporaryAppAllowlistType=0, android:broadcast.flags=8}]
+    RTC_WAKEUP #46: Alarm{e424729 type 0 origWhen 1790856000000 whenElapsed 901227801 com.example.park}
+      tag=*walarm*:com.example.park/.ParkingReminderReceiver
+      type=RTC_WAKEUP origWhen=2026-10-01 05:00:00.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x5
+      policyWhenElapsed: requester=+10d9h30m48s995ms app_standby=-17s445ms device_idle=-- battery_saver=-17s445ms
+      whenElapsed=+10d9h30m48s995ms maxWhenElapsed=+10d9h30m48s995ms
+      operation=PendingIntent{69cfaae: PendingIntentRecord{5cbf04f com.example.park broadcastIntent}}
+      idle-options=Bundle[{android.pendingIntent.backgroundActivityAllowed=2, android:broadcast.temporaryAppAllowlistReasonCode=302, android:broadcast.temporaryAppAllowlistDuration=10000, android:broadcast.temporaryAppAllowlistReason=, android:broadcast.temporaryAppAllowlistType=0, android:broadcast.flags=8}]
+    RTC_WAKEUP #47: Alarm{72793dc type 0 origWhen 1790862300000 whenElapsed 907527800 com.example.park}
+      tag=*walarm*:com.example.park/.ParkingReminderReceiver
+      type=RTC_WAKEUP origWhen=2026-10-01 06:45:00.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x5
+      policyWhenElapsed: requester=+10d11h15m48s994ms app_standby=-17s443ms device_idle=-- battery_saver=-17s443ms
+      whenElapsed=+10d11h15m48s994ms maxWhenElapsed=+10d11h15m48s994ms
+      operation=PendingIntent{30f2ce5: PendingIntentRecord{b4213ba com.example.park broadcastIntent}}
+      idle-options=Bundle[{android.pendingIntent.backgroundActivityAllowed=2, android:broadcast.temporaryAppAllowlistReasonCode=302, android:broadcast.temporaryAppAllowlistDuration=10000, android:broadcast.temporaryAppAllowlistReason=, android:broadcast.temporaryAppAllowlistType=0, android:broadcast.flags=8}]
+    RTC_WAKEUP #48: Alarm{901426b type 0 origWhen 1790863200000 whenElapsed 908427800 com.example.park}
+      tag=*walarm*:com.example.park/.ScheduleRollForwardReceiver
+      type=RTC_WAKEUP origWhen=2026-10-01 07:00:00.000 window=0 exactAllowReason=permission repeatInterval=0 count=0 flags=0x5
+      policyWhenElapsed: requester=+10d11h30m48s994ms app_standby=-17s440ms device_idle=-- battery_saver=-17s440ms
+      whenElapsed=+10d11h30m48s994ms maxWhenElapsed=+10d11h30m48s994ms
+      operation=PendingIntent{18811c8: PendingIntentRecord{50ab261 com.example.park broadcastIntent}}
+      idle-options=Bundle[{android.pendingIntent.backgroundActivityAllowed=2, android:broadcast.temporaryAppAllowlistReasonCode=302, android:broadcast.temporaryAppAllowlistDuration=10000, android:broadcast.temporaryAppAllowlistReason=, android:broadcast.temporaryAppAllowlistType=0, android:broadcast.flags=8}]
+    RTC #49: Alarm{fedb186 type 1 origWhen 1793523600000 whenElapsed 3568827800 android}
+      tag=*alarm*:*tz_offset_change*
+      type=RTC origWhen=2026-11-01 01:00:00.000 window=0 exactAllowReason=allow-listed repeatInterval=0 count=0 flags=0x1
+      policyWhenElapsed: requester=+41d6h30m48s994ms app_standby=-57s108ms device_idle=-- battery_saver=--
+      whenElapsed=+41d6h30m48s994ms maxWhenElapsed=+41d6h30m48s994ms

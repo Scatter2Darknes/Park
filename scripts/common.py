@@ -220,7 +220,8 @@ def connect(adb_arg: Optional[str] = None, device_arg: Optional[str] = None) -> 
         raise ScriptError(f"`adb devices` failed: {(listing.err or listing.out).strip()}")
     serial = select_target(parse_adb_devices(listing.out), device_arg)
     adb = Adb(adb_path, serial)
-    print(f"Target: {serial} ({'emulator' if adb.is_emulator else 'PHYSICAL PHONE'})")
+    # stderr, not stdout: a script's real output (a table, JSON) must stay clean for piping.
+    print(f"Target: {serial} ({'emulator' if adb.is_emulator else 'PHYSICAL PHONE'})", file=sys.stderr)
     return adb
 
 

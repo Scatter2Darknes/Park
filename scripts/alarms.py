@@ -1,0 +1,363 @@
+"""Turn `adb shell dumpsys alarm` into a readable table of Park's alarms - read-only.
+
+    python scripts/alarms.py                       # the one running emulator
+    python scripts/alarms.py --device R52WA025A5R  # a physical phone, named on purpose (reads only)
+    python scripts/alarms.py --json                # machine-readable
+    python scripts/alarms.py --raw                 # also dump the raw dumpsys lines it read
+    python scripts/alarms.py --file saved.txt      # parse a saved dumpsys instead of asking a device
+
+What it shows: each live alarm of com.example.park - what it is (reminder / roll-forward), when it fires in
+San Francisco time and in the device's own time, how many minutes before the sweep a reminder is, and whether
+Android will fire it EXACTLY or inexactly (an exact-alarm permission problem shows up here). It also reports the
+exact-alarm permission and notification permission app-ops.
+
+Android versions format `dumpsys alarm` differently, so parsing is tolerant: anything it can't make sense of is
+listed as a raw line rather than causing a failure. Two formats are understood (see tests/fixtures/):
+  * newer builds add a line per alarm:  type=RTC_WAKEUP origWhen=2026-10-01 05:00:00.000 window=0 exactAllowReason=permission
+    -> `window=0` means exact, `window>0` means inexact.
+  * older/Samsung builds have no such line, but their alarm HISTORY has entries like
+    [tag=*walarm*:com.example.park/.X ... H=PI:2b6896f OW=... WL=3600000 ...] that share the PendingIntent id with the
+    live alarm (PendingIntentRecord{2b6896f ...}); WL (window length) above 0 means inexact.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+from common import PACKAGE, Adb, ScriptError, connect, setup_console
+
+SF_TZ_NAME = "America/Los_Angeles"
+
+# "    RTC_WAKEUP #80: Alarm{e685937 type 0 origWhen 1790082000000 whenElapsed 129897319 com.example.park}"
+ALARM_HEADER = re.compile(
+    r"^(?P<indent>\s*)(?P<kind>[A-Z_]+)\s+#(?P<num>\d+):\s+Alarm\{(?P<id>\w+)\s+type\s+(?P<type>\d+)\s+"
+    r"origWhen\s+(?P<orig>\d+)\s+whenElapsed\s+(?P<elapsed>\d+)\s+(?P<pkg>[\w.]+)\}"
+)
+TAG_LINE = re.compile(r"\btag=\S*?:?(?P<pkg>[\w.]+)/\.?(?P<receiver>[\w.$]+)")
+# The window is printed as a plain 0 for exact alarms but as a duration like "+1h0m0s0ms" for inexact ones
+# (seen in the emulator's own dump, on another app's alarm), so it is captured as text and converted below.
+NEW_STYLE_LINE = re.compile(r"\btype=\w+\s+origWhen=.*?\bwindow=(?P<window>\S+)(?:\s+exactAllowReason=(?P<reason>\S+))?")
+_DURATION_PART = re.compile(r"(\d+)(ms|d|h|m|s)")
+_UNIT_MS = {"d": 86_400_000, "h": 3_600_000, "m": 60_000, "s": 1_000, "ms": 1}
+OPERATION_LINE = re.compile(r"PendingIntentRecord\{(?P<pi>\w+)\s")
+HISTORY_LINE = re.compile(r"\[tag=(?P<tag>\S+)\s.*?\bH=PI:(?P<pi>\w+)\b.*?\bWL=(?P<wl>\d+)\b(?P<rest>.*)\]")
+HISTORY_RTC = re.compile(r"\brtc=(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)")
+
+RECEIVER_KINDS = {
+    "ParkingReminderReceiver": "reminder",
+    "ScheduleRollForwardReceiver": "roll-forward",
+}
+
+
+@dataclass
+class Alarm:
+    number: int
+    alarm_type: str                    # RTC_WAKEUP ...
+    when_ms: int                       # origWhen: when it is due, epoch milliseconds
+    receiver: str                      # e.g. ParkingReminderReceiver
+    pi_id: Optional[str] = None        # PendingIntentRecord id, the join key to the history
+    window_ms: Optional[int] = None    # live window= value when the build prints it
+    exact_reason: Optional[str] = None
+    inexact: Optional[bool] = None     # True / False, or None when it can't be told
+    inexact_source: str = "unknown"    # "live window", "history WL", "unknown"
+    kind: str = ""                     # reminder / roll-forward / <receiver>
+    minutes_before_roll: Optional[int] = None   # for reminders: how long before the sweep-start roll-forward alarm
+    raw_lines: List[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> Tuple[str, int]:
+        """What identifies an alarm across two snapshots (used by rearm_check): its receiver and due time."""
+        return (self.receiver, self.when_ms)
+
+
+@dataclass
+class HistoryEntry:
+    pi_id: str
+    window_ms: int
+    rtc: str          # when it was SET, in device-local text, or "" if the line has no rtc=
+    order: int        # position in the dump, to break ties
+
+
+@dataclass
+class ParseResult:
+    alarms: List[Alarm]
+    history: List[HistoryEntry]
+    unparsed: List[str]           # lines that mention the package but couldn't be understood
+    raw_lines: List[str]          # every line that was read as part of an alarm entry or history entry
+
+
+# ---------------------------------------------------------------------------------------------
+# Parsing (pure; tested against fixtures)
+# ---------------------------------------------------------------------------------------------
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def parse_window(text: str) -> Optional[int]:
+    """Milliseconds from a `window=` value: '0', '3600000', or a duration such as '+1h0m0s0ms'. None if unreadable."""
+    text = text.strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    parts = _DURATION_PART.findall(text)
+    if parts and re.fullmatch(r"\+?(?:\d+(?:ms|d|h|m|s))+", text):
+        return sum(int(number) * _UNIT_MS[unit] for number, unit in parts)
+    return None
+
+
+def parse_dumpsys_alarm(text: str, package: str = PACKAGE) -> ParseResult:
+    lines = text.splitlines()
+    alarms: List[Alarm] = []
+    history: List[HistoryEntry] = []
+    unparsed: List[str] = []
+    raw: List[str] = []
+    seen = set()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        header = ALARM_HEADER.match(line)
+        if header and header.group("pkg") == package:
+            block = [line]
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and _indent(lines[j]) > len(header.group("indent")):
+                block.append(lines[j])
+                j += 1
+            alarm = Alarm(
+                number=int(header.group("num")), alarm_type=header.group("kind"),
+                when_ms=int(header.group("orig")), receiver="unknown", raw_lines=block,
+            )
+            for body in block[1:]:
+                tag = TAG_LINE.search(body)
+                if tag and tag.group("pkg") == package:
+                    alarm.receiver = tag.group("receiver")
+                new_style = NEW_STYLE_LINE.search(body)
+                if new_style:
+                    alarm.window_ms = parse_window(new_style.group("window"))  # None if unreadable -> falls back to history
+                    alarm.exact_reason = new_style.group("reason")
+                operation = OPERATION_LINE.search(body)
+                if operation:
+                    alarm.pi_id = operation.group("pi")
+            identity = (alarm.pi_id, alarm.when_ms, alarm.receiver)
+            if identity not in seen:  # the same alarm can be listed in more than one section of the dump
+                seen.add(identity)
+                alarms.append(alarm)
+                raw.extend(block)
+            i = j
+            continue
+        if "Alarm{" in line and package in line:
+            unparsed.append(line)  # looks like one of ours but the layout is unfamiliar: show it, don't fail
+        hist = HISTORY_LINE.search(line)
+        if hist and package in hist.group("tag"):
+            rtc = HISTORY_RTC.search(hist.group("rest"))
+            history.append(HistoryEntry(hist.group("pi"), int(hist.group("wl")), rtc.group(1) if rtc else "", len(history)))
+            raw.append(line)
+        i += 1
+
+    _classify(alarms, history)
+    return ParseResult(alarms, history, unparsed, raw)
+
+
+def _latest_history_by_pi(history: List[HistoryEntry]) -> Dict[str, HistoryEntry]:
+    """The most recent history entry for each PendingIntent id (latest rtc= time; later in the file wins ties)."""
+    latest: Dict[str, HistoryEntry] = {}
+    for entry in history:
+        current = latest.get(entry.pi_id)
+        if current is None or (entry.rtc, entry.order) >= (current.rtc, current.order):
+            latest[entry.pi_id] = entry
+    return latest
+
+
+def _classify(alarms: List[Alarm], history: List[HistoryEntry]) -> None:
+    latest = _latest_history_by_pi(history)
+    for alarm in alarms:
+        alarm.kind = RECEIVER_KINDS.get(alarm.receiver, alarm.receiver.lower())
+        if alarm.window_ms is not None:                       # newer builds say it outright
+            alarm.inexact, alarm.inexact_source = alarm.window_ms > 0, "live window"
+        elif alarm.pi_id and alarm.pi_id in latest:           # older builds: look in the history
+            alarm.inexact, alarm.inexact_source = latest[alarm.pi_id].window_ms > 0, "history WL"
+    rolls = sorted(a.when_ms for a in alarms if a.kind == "roll-forward")
+    for alarm in alarms:
+        if alarm.kind == "reminder":
+            after = [r for r in rolls if r >= alarm.when_ms]
+            if after:
+                alarm.minutes_before_roll = -round((after[0] - alarm.when_ms) / 60_000)
+
+
+# ---------------------------------------------------------------------------------------------
+# Times
+# ---------------------------------------------------------------------------------------------
+
+def _pacific_fallback(when_utc: dt.datetime) -> dt.datetime:
+    """Pacific time without the tz database (US rules since 2007: DST from the 2nd Sunday in March at 2am to the 1st
+    Sunday in November at 2am). Only used if Python has no tzdata."""
+    def nth_sunday(year: int, month: int, n: int) -> dt.date:
+        first = dt.date(year, month, 1)
+        return first + dt.timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+    year = when_utc.year
+    dst_start = dt.datetime.combine(nth_sunday(year, 3, 2), dt.time(2)) + dt.timedelta(hours=8)   # 2am PST = 10:00 UTC
+    dst_end = dt.datetime.combine(nth_sunday(year, 11, 1), dt.time(2)) + dt.timedelta(hours=7)    # 2am PDT =  9:00 UTC
+    naive = when_utc.replace(tzinfo=None)
+    return (naive - dt.timedelta(hours=7 if dst_start <= naive < dst_end else 8))
+
+
+def format_time(ms: int, tz_name: str) -> str:
+    """'Tue 2026-09-22 06:00' for the epoch-millis `ms` in the named zone (falls back to fixed rules for Pacific)."""
+    utc = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+    try:
+        import zoneinfo
+        local = utc.astimezone(zoneinfo.ZoneInfo(tz_name))
+    except Exception:  # no tzdata on this machine
+        if tz_name != SF_TZ_NAME:
+            return utc.strftime("%a %Y-%m-%d %H:%M") + " UTC"
+        local = _pacific_fallback(utc)
+    return local.strftime("%a %Y-%m-%d %H:%M")
+
+
+# ---------------------------------------------------------------------------------------------
+# App-ops (exact-alarm and notification permission)
+# ---------------------------------------------------------------------------------------------
+
+def parse_appop(text: str, op: str) -> str:
+    """'allow' / 'deny' / 'ignore' / 'default' ... from `appops get` output, or 'unknown'."""
+    match = re.search(rf"\b{re.escape(op)}\s*:\s*(\w+)", text)
+    return match.group(1).lower() if match else "unknown"
+
+
+@dataclass
+class Permissions:
+    exact_alarm: str = "unknown"
+    notifications: str = "unknown"
+
+
+def read_permissions(adb: Adb) -> Permissions:
+    exact = adb.shell(f"appops get {PACKAGE} SCHEDULE_EXACT_ALARM", allow_fail=True).out
+    notif = adb.shell(f"appops get {PACKAGE} POST_NOTIFICATION", allow_fail=True).out
+    permissions = Permissions(parse_appop(exact, "SCHEDULE_EXACT_ALARM"), parse_appop(notif, "POST_NOTIFICATION"))
+    if permissions.notifications == "unknown":
+        # `appops` has no record until something has used the permission; the runtime grant is the real answer.
+        package_dump = adb.shell(f"dumpsys package {PACKAGE}", allow_fail=True, timeout=60).out
+        granted = re.search(r"android\.permission\.POST_NOTIFICATIONS:\s*granted=(true|false)", package_dump)
+        if granted:
+            permissions.notifications = "allow" if granted.group(1) == "true" else "deny"
+    return permissions
+
+
+# ---------------------------------------------------------------------------------------------
+# Reading from a device, and reporting
+# ---------------------------------------------------------------------------------------------
+
+def fetch_dumpsys(adb: Adb) -> str:
+    return adb.shell("dumpsys alarm", timeout=60).out
+
+
+def fetch_alarms(adb: Adb) -> ParseResult:
+    """The device's live alarms for the app right now (used by rearm_check.py)."""
+    return parse_dumpsys_alarm(fetch_dumpsys(adb))
+
+
+def device_timezone(adb: Optional[Adb]) -> str:
+    if adb is None:
+        return SF_TZ_NAME
+    name = adb.getprop("persist.sys.timezone")
+    return name or SF_TZ_NAME
+
+
+def yes_no(value: Optional[bool]) -> str:
+    return "unknown" if value is None else ("yes" if value else "no")
+
+
+def summarize(alarms: List[Alarm], permissions: Permissions) -> str:
+    if not alarms:
+        return f"0 live alarms; exact permission: {permissions.exact_alarm}"
+    nxt = min(alarms, key=lambda a: a.when_ms)
+    inexact_values = {a.inexact for a in alarms}
+    inexact = "yes" if True in inexact_values else ("unknown" if None in inexact_values else "no")
+    return (f"{len(alarms)} live alarm{'s' if len(alarms) != 1 else ''}; next: {format_time(nxt.when_ms, SF_TZ_NAME)} PT; "
+            f"inexact: {inexact}; exact permission: {permissions.exact_alarm}")
+
+
+def render_table(alarms: List[Alarm], local_tz: str) -> str:
+    same_zone = local_tz == SF_TZ_NAME
+    rows = [("#", "kind", "receiver", "due (San Francisco)", "due (device time)" + (" = SF" if same_zone else f" [{local_tz}]"),
+             "vs sweep", "timing")]
+    for a in sorted(alarms, key=lambda x: (x.when_ms, x.number)):
+        vs = f"{a.minutes_before_roll} min" if a.minutes_before_roll is not None else ("sweep start" if a.kind == "roll-forward" else "")
+        timing = {True: "INEXACT", False: "exact", None: "window unknown"}[a.inexact]
+        rows.append((str(a.number), a.kind, a.receiver, format_time(a.when_ms, SF_TZ_NAME), format_time(a.when_ms, local_tz), vs, timing))
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(r)).rstrip() for r in rows)
+
+
+def to_json(result: ParseResult, permissions: Permissions, local_tz: str) -> dict:
+    return {
+        "package": PACKAGE,
+        "summary": summarize(result.alarms, permissions),
+        "permissions": {"exact_alarm": permissions.exact_alarm, "notifications": permissions.notifications},
+        "alarms": [
+            {
+                "number": a.number, "kind": a.kind, "receiver": a.receiver, "due_epoch_ms": a.when_ms,
+                "due_sf": format_time(a.when_ms, SF_TZ_NAME), "due_local": format_time(a.when_ms, local_tz),
+                "minutes_before_sweep": a.minutes_before_roll, "inexact": a.inexact, "inexact_source": a.inexact_source,
+                "exact_allow_reason": a.exact_reason, "pending_intent_id": a.pi_id,
+            }
+            for a in sorted(result.alarms, key=lambda x: (x.when_ms, x.number))
+        ],
+        "unparsed_lines": result.unparsed,
+    }
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    setup_console()
+    parser = argparse.ArgumentParser(description="Decode `dumpsys alarm` for Park (read-only).")
+    parser.add_argument("--device", "-d", help="serial of the device (default: the one running emulator)")
+    parser.add_argument("--adb", help="path to adb.exe")
+    parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    parser.add_argument("--raw", action="store_true", help="also print the raw dumpsys lines that were read")
+    parser.add_argument("--file", type=Path, help="parse this saved `dumpsys alarm` output instead of asking a device")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.file:
+            adb = None
+            text = args.file.read_text(encoding="utf-8", errors="replace")
+            permissions = Permissions()
+        else:
+            adb = connect(args.adb, args.device)
+            text = fetch_dumpsys(adb)
+            permissions = read_permissions(adb)
+        result = parse_dumpsys_alarm(text)
+        local_tz = device_timezone(adb)
+    except ScriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(to_json(result, permissions, local_tz), indent=2))
+        return 0
+
+    if result.alarms:
+        print(render_table(result.alarms, local_tz))
+    print()
+    print(summarize(result.alarms, permissions))
+    print(f"notifications permission: {permissions.notifications}")
+    if result.unparsed:
+        print("\nLines that mention the app but weren't understood (shown raw):")
+        for line in result.unparsed:
+            print("  " + line.strip())
+    if args.raw:
+        print("\nRaw lines read:")
+        for line in result.raw_lines:
+            print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

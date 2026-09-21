@@ -1,0 +1,20 @@
+Current AlarmManager state:
+  Pending alarm batches: 3
+    RTC_WAKEUP #80: Alarm{e685937 type 0 origWhen 1790082000000 whenElapsed 129897319 com.example.park}
+      tag=*walarm*:com.example.park/.ParkingReminderReceiver
+      operation=PendingIntent{526eea4: PendingIntentRecord{2b6896f com.example.park broadcastIntent}}
+    RTC_WAKEUP #81: Alarm{a41c9d2 type 0 origWhen 1790088300000 whenElapsed 136197319 com.example.park}
+      tag=*walarm*:com.example.park/.ParkingReminderReceiver
+      operation=PendingIntent{7c3b0a1: PendingIntentRecord{9d2e4f7 com.example.park broadcastIntent}}
+    RTC_WAKEUP #82: Alarm{8df51d3 type 0 origWhen 1790089200000 whenElapsed 137097319 com.example.park}
+      tag=*walarm*:com.example.park/.ScheduleRollForwardReceiver
+      operation=PendingIntent{e365110: PendingIntentRecord{5a53b05 com.example.park broadcastIntent}}
+    RTC_WAKEUP #83: Alarm{b7720e4 type 0 origWhen 1790090000000 whenElapsed 137897319 com.google.android.gms}
+      tag=*walarm*:com.google.android.gms/.somebody.Else
+      operation=PendingIntent{11aa22b: PendingIntentRecord{33cc44d com.google.android.gms broadcastIntent}}
+
+  Alarm history (most recent last):
+      [tag=*walarm*:com.example.park/.ScheduleRollForwardReceiver T=0 F=32 AC=false H=PI:5a53b05 OW=2026-09-22 08:00:00.000 WL=0 elapsed=976000 rtc=2026-09-20 18:11:18.500]
+      [tag=*walarm*:com.example.park/.ParkingReminderReceiver T=0 F=32 AC=false H=PI:9d2e4f7 OW=2026-09-22 07:45:00.000 WL=0 elapsed=976100 rtc=2026-09-20 18:11:18.700]
+      [tag=*walarm*:com.example.park/.ParkingReminderReceiver T=0 F=32 AC=false H=PI:2b6896f OW=2026-09-22 06:00:00.000 WL=3600000 elapsed=976255 rtc=2026-09-20 18:11:18.936]
+      [tag=*walarm*:com.example.park/.ParkingReminderReceiver T=0 F=32 AC=false H=PI:2b6896f OW=2026-09-22 06:00:00.000 WL=0 elapsed=900000 rtc=2026-09-20 17:00:00.000]
