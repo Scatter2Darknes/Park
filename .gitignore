@@ -23,3 +23,14 @@ app/src/main/assets/datasf_app_token.txt
 *.keystore
 *.apk
 *.aab
+
+# Test-automation scripts (scripts/): captured data contains parking locations and car names - never commit it
+backups/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+park_database*
+__pycache__/
+*.pyc
