@@ -120,13 +120,17 @@ fun SettingsScreen(
     val syncStatusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
     // Live per-feed progress, mirroring what SyncStatusDialog (the Setup UI) already shows —
     // this section previously had none of this, only the final syncStatusMessage above.
+    val isSyncRunningInBackground by StreetDataSyncCenter.isSyncRunning.collectAsState()
     val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
     val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
+    val segmentPhaseCompleted by StreetDataSyncCenter.segmentPhaseCompleted.collectAsState()
     val rppCurrentAttemptFetchedCount by StreetDataSyncCenter.rppCurrentAttemptFetchedCount.collectAsState()
     val rppCurrentAttemptTotalCount by StreetDataSyncCenter.rppCurrentAttemptTotalCount.collectAsState()
+    val rppPhaseCompleted by StreetDataSyncCenter.rppPhaseCompleted.collectAsState()
     val meterCurrentAttemptPhase by StreetDataSyncCenter.meterCurrentAttemptPhase.collectAsState()
     val meterCurrentAttemptFetchedCount by StreetDataSyncCenter.meterCurrentAttemptFetchedCount.collectAsState()
     val meterCurrentAttemptTotalCount by StreetDataSyncCenter.meterCurrentAttemptTotalCount.collectAsState()
+    val meterPhaseCompleted by StreetDataSyncCenter.meterPhaseCompleted.collectAsState()
     var offsetMenuExpanded by remember { mutableStateOf(false) }
     var urgentOffsetMenuExpanded by remember { mutableStateOf(false) }
     var informationalTimeoutMinutes by remember { mutableStateOf(SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES) }
@@ -1028,28 +1032,30 @@ fun SettingsScreen(
         ) {
             Text(if (isSyncBusy) "Refreshing\u2026" else "Refresh Data Now")
         }
-        // Same three-line progress sequence SyncStatusDialog shows (segments, then RPP zone
-        // regulations, then meters \u2014 see StreetDataSyncCenter/MeteredZoneRepository for why
-        // they run in that order) \u2014 previously this section showed nothing while a refresh
-        // was in flight, only the final syncStatusMessage below once it finished.
-        currentAttemptFetchedCount?.let { fetched ->
+        // Same three-line simultaneous progress SyncStatusDialog shows \u2014 all three feeds visible
+        // together (segments, then RPP zone regulations, then meters, in the order they actually
+        // run \u2014 see StreetDataSyncCenter/MeteredZoneRepository), so a feed that finishes
+        // quickly doesn't just vanish while a slower one is still going. Previously this section
+        // showed nothing at all while a refresh was in flight, only the final syncStatusMessage
+        // below once everything finished. isSyncRunningInBackground covers the periodic worker
+        // (isSyncBusy alone only reflects a manual "Refresh Data Now" tap or an import).
+        if (isSyncBusy || isSyncRunningInBackground) {
             Spacer(Modifier.height(4.dp))
             Text(
-                formatFetchProgress("segments", fetched, currentAttemptTotalCount) + " this sync\u2026",
+                formatSyncPhaseLine("segments", currentAttemptFetchedCount, currentAttemptTotalCount, segmentPhaseCompleted),
                 style = MaterialTheme.typography.bodySmall
             )
-        }
-        rppCurrentAttemptFetchedCount?.let { fetched ->
             Spacer(Modifier.height(4.dp))
             Text(
-                formatFetchProgress("RPP zone regulations", fetched, rppCurrentAttemptTotalCount) + " this sync\u2026",
+                formatSyncPhaseLine("RPP zone regulations", rppCurrentAttemptFetchedCount, rppCurrentAttemptTotalCount, rppPhaseCompleted),
                 style = MaterialTheme.typography.bodySmall
             )
-        }
-        meterCurrentAttemptPhase?.let { phase ->
             Spacer(Modifier.height(4.dp))
             Text(
-                formatFetchProgress(phase, meterCurrentAttemptFetchedCount ?: 0, meterCurrentAttemptTotalCount) + " this sync\u2026",
+                formatSyncPhaseLine(
+                    "metered zones", meterCurrentAttemptFetchedCount, meterCurrentAttemptTotalCount,
+                    meterPhaseCompleted, activeLabel = meterCurrentAttemptPhase
+                ),
                 style = MaterialTheme.typography.bodySmall
             )
         }

@@ -38,6 +38,34 @@ fun formatFetchProgress(label: String, fetched: Int, total: Int?): String =
     else "${"%,d".format(fetched)} $label fetched…"
 
 /**
+ * One feed's status line for as long as a sync is in flight, so segments/RPP/meters can all be
+ * shown at once instead of a feed that finishes quickly (RPP, usually) quietly disappearing
+ * while the slowest one (segments) is still going — which read as the whole sync being stuck.
+ * Three states: not yet its turn ("Queued: …"), actively fetching (reuses [formatFetchProgress]),
+ * or done ("✓ … synced"). [completed] is StreetDataSyncCenter's *PhaseCompleted flow for this
+ * feed — needed because a finished phase's fetched/total counts are deliberately left in place
+ * rather than nulled (see onSyncAttemptEnded's doc comment), so nullness alone can no longer
+ * tell "done" apart from "still fetching". [activeLabel] overrides [label] only while actively
+ * fetching, for meters' two sub-phases ("meter locations" / "meter operating schedules") — the
+ * queued/done states always use the fixed [label] ("metered zones") instead.
+ */
+fun formatSyncPhaseLine(
+    label: String,
+    fetched: Int?,
+    total: Int?,
+    completed: Boolean,
+    activeLabel: String? = null
+): String = when {
+    completed -> "✓ " + if (total != null && total > 0) {
+        "${"%,d".format(total)} $label synced"
+    } else {
+        "${"%,d".format(fetched ?: 0)} $label synced"
+    }
+    fetched != null -> formatFetchProgress(activeLabel ?: label, fetched, total)
+    else -> "Queued: $label"
+}
+
+/**
  * A full-width bar rendered once in MainActivity, above whichever screen is currently showing
  * (not floating on top of it) — so it persists across every screen instead of the "syncing"
  * indicator only existing on the map, and pushes screen content down rather than risking
@@ -71,7 +99,7 @@ fun SyncStatusBar(onClick: () -> Unit) {
             } else {
                 // Plain Unicode glyph, matching this project's existing convention of avoiding
                 // a Material Icons dependency for simple indicators.
-                Text("\u26A0", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("⚠", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
             Spacer(Modifier.width(10.dp))
             // currentAttemptFetchedCount (not totalSegmentCount) whenever a sync is actively
@@ -84,11 +112,11 @@ fun SyncStatusBar(onClick: () -> Unit) {
             val count = totalSegmentCount
             Text(
                 when {
-                    attemptCount != null -> "Syncing street data\u2026 ${formatFetchProgress("segments", attemptCount, currentAttemptTotalCount)}"
-                    isSyncRunning && (count ?: 0) > 0 -> "Syncing street data\u2026 ${"%,d".format(count)} loaded"
-                    isSyncRunning -> "Syncing street data\u2026"
-                    (count ?: 0) > 0 -> "${"%,d".format(count)} segments loaded so far \u2014 tap for options"
-                    else -> "Street data not fully loaded \u2014 tap for options"
+                    attemptCount != null -> "Syncing street data… ${formatFetchProgress("segments", attemptCount, currentAttemptTotalCount)}"
+                    isSyncRunning && (count ?: 0) > 0 -> "Syncing street data… ${"%,d".format(count)} loaded"
+                    isSyncRunning -> "Syncing street data…"
+                    (count ?: 0) > 0 -> "${"%,d".format(count)} segments loaded so far — tap for options"
+                    else -> "Street data not fully loaded — tap for options"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -108,14 +136,21 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
     val totalSegmentCount by StreetDataSyncCenter.totalSegmentCount.collectAsState()
     val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
     val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
+    val segmentPhaseCompleted by StreetDataSyncCenter.segmentPhaseCompleted.collectAsState()
     val rppCurrentAttemptFetchedCount by StreetDataSyncCenter.rppCurrentAttemptFetchedCount.collectAsState()
     val rppCurrentAttemptTotalCount by StreetDataSyncCenter.rppCurrentAttemptTotalCount.collectAsState()
+    val rppPhaseCompleted by StreetDataSyncCenter.rppPhaseCompleted.collectAsState()
     val meterCurrentAttemptPhase by StreetDataSyncCenter.meterCurrentAttemptPhase.collectAsState()
     val meterCurrentAttemptFetchedCount by StreetDataSyncCenter.meterCurrentAttemptFetchedCount.collectAsState()
     val meterCurrentAttemptTotalCount by StreetDataSyncCenter.meterCurrentAttemptTotalCount.collectAsState()
+    val meterPhaseCompleted by StreetDataSyncCenter.meterPhaseCompleted.collectAsState()
     val isSyncRunning by StreetDataSyncCenter.isSyncRunning.collectAsState()
     val isBusy by StreetDataSyncCenter.isBusy.collectAsState()
     val statusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
+    // isSyncRunning only reflects the periodic background worker (see its own doc comment) —
+    // a manual "Sync Now" tap only ever flips isBusy, never isSyncRunning — so both are needed
+    // to know whether ANY sync (either kind) is currently in flight.
+    val anySyncActive = isSyncRunning || isBusy
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -137,47 +172,40 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(6.dp))
-                // currentAttemptFetchedCount while a sync is actively in flight — see
-                // StreetDataSyncCenter's doc comment: totalSegmentCount can look frozen during
-                // a re-sync of an already-populated table (insertAll is a REPLACE, so
-                // re-walking existing rows doesn't move the DB's total), so this shows the
-                // honest in-flight number instead, including it visibly resetting on a fresh
-                // attempt rather than silently displaying a stale total.
-                val attemptCount = currentAttemptFetchedCount
-                val count = totalSegmentCount ?: 0
-                Text(
-                    when {
-                        attemptCount != null -> formatFetchProgress("segments", attemptCount, currentAttemptTotalCount) + " this sync\u2026"
-                        count > 0 -> "${"%,d".format(count)} segments loaded so far\u2026"
-                        isSyncRunning -> "Downloading now \u2014 this can take a minute on first launch."
-                        else -> "Not synced yet."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-                // Runs sequentially AFTER the segment fetch above completes (see
-                // triggerManualRefresh/SweepingDataRefreshWorker) — shown as its own line so
-                // "Sync Now" doesn't look like it's finished/hung during this second phase,
-                // which previously had no progress indication of its own at all.
-                rppCurrentAttemptFetchedCount?.let { count ->
+                if (anySyncActive) {
+                    // All three feeds shown together for the whole sync, not just whichever one
+                    // happens to be running right now — segments (the slowest) run first, then
+                    // RPP, then meters (see triggerManualRefresh/SweepingDataRefreshWorker), so
+                    // without this a feed that finishes quickly would just vanish while a
+                    // slower one is still going, which read as the sync being stuck.
+                    Text(
+                        formatSyncPhaseLine("segments", currentAttemptFetchedCount, currentAttemptTotalCount, segmentPhaseCompleted),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        formatFetchProgress("RPP zone regulations", count, rppCurrentAttemptTotalCount) + " this sync…",
+                        formatSyncPhaseLine("RPP zone regulations", rppCurrentAttemptFetchedCount, rppCurrentAttemptTotalCount, rppPhaseCompleted),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
-                }
-                // Meter sync runs as its own two-phase pass (locations, then operating
-                // schedules — see MeteredZoneRepository) after RPP — same reasoning as the RPP
-                // line above: without this, "Sync Now" looks hung during this third phase.
-                meterCurrentAttemptPhase?.let { phase ->
-                    val fetched = meterCurrentAttemptFetchedCount ?: 0
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        formatFetchProgress(phase, fetched, meterCurrentAttemptTotalCount) + " this sync…",
+                        formatSyncPhaseLine(
+                            "metered zones", meterCurrentAttemptFetchedCount, meterCurrentAttemptTotalCount,
+                            meterPhaseCompleted, activeLabel = meterCurrentAttemptPhase
+                        ),
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    val count = totalSegmentCount ?: 0
+                    Text(
+                        if (count > 0) "${"%,d".format(count)} segments loaded so far…" else "Not synced yet.",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
@@ -188,7 +216,7 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "⚠\uFE0F This can take a few minutes \u2014 force-quitting the app before it finishes " +
+                    "⚠️ This can take a few minutes — force-quitting the app before it finishes " +
                             "will interrupt it (it'll pick back up next time you open the app, but " +
                             "leaving it running is faster).",
                     style = MaterialTheme.typography.bodySmall,
@@ -201,7 +229,7 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                     enabled = !isBusy,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (isBusy) "Working\u2026" else "Sync Now")
+                    Text(if (isBusy) "Working…" else "Sync Now")
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
@@ -219,7 +247,7 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                 if (isBusy) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "A sync is already in progress \u2014 wait for it to finish before importing.",
+                        "A sync is already in progress — wait for it to finish before importing.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,

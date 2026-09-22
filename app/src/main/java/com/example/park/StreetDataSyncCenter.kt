@@ -47,6 +47,16 @@ object StreetDataSyncCenter {
     private val _currentAttemptTotalCount = MutableStateFlow<Int?>(null)
     val currentAttemptTotalCount: StateFlow<Int?> = _currentAttemptTotalCount.asStateFlow()
 
+    // True once this attempt's segment fetch has finished (success or failure — see
+    // onSyncAttemptEnded). Needed because currentAttemptFetchedCount/TotalCount are no longer
+    // nulled out when a phase ends (see those functions' doc comments): without a separate
+    // "done" signal, the UI couldn't tell "finished" apart from "still fetching" once this
+    // phase's numbers stop changing, and all three feeds' progress needs to stay visible
+    // together — otherwise a phase that finishes quickly (RPP, usually) just vanishes while
+    // segments (the slowest feed) is still going, which reads as if the whole sync stalled.
+    private val _segmentPhaseCompleted = MutableStateFlow(false)
+    val segmentPhaseCompleted: StateFlow<Boolean> = _segmentPhaseCompleted.asStateFlow()
+
     // Same idea, for the RPP zone regulation feed — a separate fetch that runs sequentially
     // after the sweeping sync (see triggerManualRefresh and SweepingDataRefreshWorker), so its
     // progress is tracked independently rather than folded into the count above.
@@ -54,6 +64,8 @@ object StreetDataSyncCenter {
     val rppCurrentAttemptFetchedCount: StateFlow<Int?> = _rppCurrentAttemptFetchedCount.asStateFlow()
     private val _rppCurrentAttemptTotalCount = MutableStateFlow<Int?>(null)
     val rppCurrentAttemptTotalCount: StateFlow<Int?> = _rppCurrentAttemptTotalCount.asStateFlow()
+    private val _rppPhaseCompleted = MutableStateFlow(false)
+    val rppPhaseCompleted: StateFlow<Boolean> = _rppPhaseCompleted.asStateFlow()
 
     // Same idea again, for the metered-zone feed (see MeteredZoneRepository.refreshFromNetwork()).
     // Two phases (meter locations, then meter operating schedules — see MeteredZoneApi.kt for
@@ -67,6 +79,8 @@ object StreetDataSyncCenter {
     // no meter sync is in flight.
     private val _meterCurrentAttemptPhase = MutableStateFlow<String?>(null)
     val meterCurrentAttemptPhase: StateFlow<String?> = _meterCurrentAttemptPhase.asStateFlow()
+    private val _meterPhaseCompleted = MutableStateFlow(false)
+    val meterPhaseCompleted: StateFlow<Boolean> = _meterPhaseCompleted.asStateFlow()
 
     private val _isSyncRunning = MutableStateFlow(false)
     val isSyncRunning: StateFlow<Boolean> = _isSyncRunning.asStateFlow()
@@ -201,15 +215,32 @@ object StreetDataSyncCenter {
     fun onSyncAttemptStarted(total: Int? = null) {
         _currentAttemptFetchedCount.value = 0
         _currentAttemptTotalCount.value = total
+        _segmentPhaseCompleted.value = false
+        // Segments always runs first, in both the periodic worker and manual refresh (see
+        // SweepingDataRefreshWorker/triggerManualRefresh) — this is the one reliable "a whole
+        // new sync just began" signal, so it's also where RPP and meters reset back to "not
+        // started yet" for this attempt, rather than showing leftover numbers from the sync
+        // before this one while their own phase hasn't started yet.
+        _rppCurrentAttemptFetchedCount.value = null
+        _rppCurrentAttemptTotalCount.value = null
+        _rppPhaseCompleted.value = false
+        _meterCurrentAttemptPhase.value = null
+        _meterCurrentAttemptFetchedCount.value = null
+        _meterCurrentAttemptTotalCount.value = null
+        _meterPhaseCompleted.value = false
     }
 
     fun onSyncAttemptProgress(fetchedSoFar: Int) {
         _currentAttemptFetchedCount.value = fetchedSoFar
     }
 
+    // Deliberately does NOT null currentAttemptFetchedCount/TotalCount anymore — the UI keeps
+    // showing this phase's final numbers (marked done via segmentPhaseCompleted) alongside
+    // RPP/meter progress while those are still going, instead of this line vanishing the
+    // instant segments finish. They reset together at the start of the NEXT sync instead (see
+    // onSyncAttemptStarted).
     fun onSyncAttemptEnded() {
-        _currentAttemptFetchedCount.value = null
-        _currentAttemptTotalCount.value = null
+        _segmentPhaseCompleted.value = true
     }
 
     // Same idea as the three functions above, but for the RPP zone regulation feed — a
@@ -219,15 +250,16 @@ object StreetDataSyncCenter {
     fun onRppSyncAttemptStarted(total: Int? = null) {
         _rppCurrentAttemptFetchedCount.value = 0
         _rppCurrentAttemptTotalCount.value = total
+        _rppPhaseCompleted.value = false
     }
 
     fun onRppSyncAttemptProgress(fetchedSoFar: Int) {
         _rppCurrentAttemptFetchedCount.value = fetchedSoFar
     }
 
+    // Doesn't null the counts — see onSyncAttemptEnded's doc comment for why.
     fun onRppSyncAttemptEnded() {
-        _rppCurrentAttemptFetchedCount.value = null
-        _rppCurrentAttemptTotalCount.value = null
+        _rppPhaseCompleted.value = true
     }
 
     // Same idea again, for the metered-zone feed's two phases (see MeteredZoneRepository).
@@ -236,16 +268,19 @@ object StreetDataSyncCenter {
         _meterCurrentAttemptPhase.value = label
         _meterCurrentAttemptFetchedCount.value = 0
         _meterCurrentAttemptTotalCount.value = total
+        _meterPhaseCompleted.value = false
     }
 
     fun onMeterSyncAttemptProgress(fetchedSoFar: Int) {
         _meterCurrentAttemptFetchedCount.value = fetchedSoFar
     }
 
+    // Doesn't null the phase label/counts — see onSyncAttemptEnded's doc comment for why. The
+    // phase label stays at whichever of the two meter phases ran last ("meter operating
+    // schedules", in practice, since that phase always runs second) so the done line can still
+    // say what finished.
     fun onMeterSyncAttemptEnded() {
-        _meterCurrentAttemptPhase.value = null
-        _meterCurrentAttemptFetchedCount.value = null
-        _meterCurrentAttemptTotalCount.value = null
+        _meterPhaseCompleted.value = true
     }
 
     /**
