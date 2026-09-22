@@ -45,6 +45,15 @@ private const val MAX_RPP_ZONE_LABELS = 40
 // Same idea, for meter badges.
 private const val MAX_METER_BADGES = 40
 
+// How close two badges' SCREEN positions (not geographic distance — this is what actually
+// governs visual overlap, and it's naturally zoom-aware: the same real-world spacing maps to
+// more screen pixels zoomed in, fewer zoomed out) can be before the later one is skipped
+// entirely rather than drawn on top of / crowding the earlier one. Approximate (badges are
+// pills of varying width, not all the same size, so this is a circular stand-in for what's
+// really an irregular bounding-box overlap check) but tuned to noticeably thin out a dense
+// block without being so aggressive it hides genuinely separate badges.
+private const val BADGE_SUPPRESSION_RADIUS_DP = 26f
+
 // A fixed violet, deliberately outside the SAFE/SOON/IMMINENT/ACTIVE palette (greens/yellows/
 // reds) and not user-configurable like those are — RPP status isn't a sweep-urgency signal, so
 // it shouldn't visually read as one.
@@ -848,6 +857,28 @@ suspend fun loadAndDrawSegments(
         mapView.overlays.add(visibleLine)
     }
 
+    // Shared across all three badge kinds below (countdown, RPP zone, meter) so they never
+    // visually stack on top of each other — checked and updated in priority order (countdown
+    // first, then RPP, then meter: most safety-critical/least numerous wins a collision), and
+    // also naturally thins out same-kind density (e.g. several meters on one block), since a
+    // later same-type candidate checks against earlier ones from its own loop too. See
+    // BADGE_SUPPRESSION_RADIUS_DP's doc comment for why this is screen-space, not geographic.
+    val placedBadgeScreenPoints = mutableListOf<android.graphics.Point>()
+    val badgeSuppressionRadiusPx = BADGE_SUPPRESSION_RADIUS_DP * context.resources.displayMetrics.density
+    // Returns true (and reserves the spot) if [geoPoint] isn't too close to any badge already
+    // placed this draw pass; false (and draws nothing) if it is.
+    fun tryPlaceBadge(geoPoint: GeoPoint): Boolean {
+        val screenPoint = mapView.projection.toPixels(geoPoint, null)
+        val tooClose = placedBadgeScreenPoints.any { existing ->
+            val dx = (existing.x - screenPoint.x).toDouble()
+            val dy = (existing.y - screenPoint.y).toDouble()
+            sqrt(dx * dx + dy * dy) < badgeSuppressionRadiusPx
+        }
+        if (tooClose) return false
+        placedBadgeScreenPoints.add(screenPoint)
+        return true
+    }
+
     if (showCountdownLabels) {
         val centerLatLng = LatLng(centerPoint.latitude, centerPoint.longitude)
 
@@ -871,9 +902,10 @@ suspend fun loadAndDrawSegments(
                         ?.let { java.time.Duration.between(now, it).toMillis() }
                     else -> null
                 }
-                if (countdownMillis != null) {
+                val geoPoint = GeoPoint(midpoint.lat, midpoint.lng)
+                if (countdownMillis != null && tryPlaceBadge(geoPoint)) {
                     val label = CountdownLabelMarker(mapView).apply {
-                        position = GeoPoint(midpoint.lat, midpoint.lng)
+                        position = geoPoint
                         icon = buildCountdownLabelIcon(
                             context,
                             formatShortCountdown(countdownMillis),
@@ -909,8 +941,10 @@ suspend fun loadAndDrawSegments(
             .take(MAX_RPP_ZONE_LABELS)
             .forEach { (triple, _) ->
                 val (regulation, midpoint, remainingMillis) = triple
+                val geoPoint = GeoPoint(midpoint.lat, midpoint.lng)
+                if (!tryPlaceBadge(geoPoint)) return@forEach
                 val label = RppZoneLabelMarker(mapView).apply {
-                    position = GeoPoint(midpoint.lat, midpoint.lng)
+                    position = geoPoint
                     // Compact, and without the redundant "RPP" word — the violet color already
                     // reads as "this is the permit indicator" once meters have their own,
                     // entirely different (icon-only) badge style, so it doesn't need spelling
@@ -942,8 +976,10 @@ suspend fun loadAndDrawSegments(
             .sortedBy { (_, distance) -> distance }
             .take(MAX_METER_BADGES)
             .forEach { (zone, _) ->
+                val geoPoint = GeoPoint(zone.lat, zone.lng)
+                if (!tryPlaceBadge(geoPoint)) return@forEach
                 val badge = MeterBadgeMarker(mapView).apply {
-                    position = GeoPoint(zone.lat, zone.lng)
+                    position = geoPoint
                     icon = buildMeterBadgeIcon(context, METER_BADGE_COLOR_INT)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setOnMarkerClickListener { _, _ -> false } // purely visual, same as the other labels
