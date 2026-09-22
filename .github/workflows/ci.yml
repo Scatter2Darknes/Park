@@ -36,9 +36,34 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      # Installs the Android command-line tools and accepts the SDK licences, so Gradle can download the compileSdk platform.
+      # GitHub's Ubuntu runners already have an Android SDK (ANDROID_HOME=/usr/local/lib/android/sdk, with sdkmanager
+      # under cmdline-tools/latest/bin), so nothing is downloaded to set one up. android-actions/setup-android@v3 was
+      # removed because it tries to install the legacy "tools" package and fails ("Failed to find package 'tools'").
+      # This step only makes sure the two packages this project needs are there. Keep them in step with the project:
+      #   platform     = compileSdk in app/build.gradle.kts (release(37) is the package "platforms;android-37.0")
+      #   build tools  = the version Android Gradle Plugin 9.4.0 uses by default (the project doesn't pin one)
+      # (scripts/tests/test_ci_workflow.py checks the platform against compileSdk.)
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        env:
+          ANDROID_PLATFORM: "platforms;android-37.0"
+          ANDROID_BUILD_TOOLS: "build-tools;36.0.0"
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK root: $sdk_root"
+          env | sort | grep -i '^ANDROID' || true
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            echo "::error::No sdkmanager at $sdkmanager"
+            ls -la "$sdk_root" "$sdk_root/cmdline-tools" || true
+            exit 1
+          fi
+          # Answers "y" to every licence prompt without a pipe, so `yes` being closed early can't fail the step.
+          "$sdkmanager" --sdk_root="$sdk_root" --licenses < <(yes) > /dev/null
+          "$sdkmanager" --sdk_root="$sdk_root" --install "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"
+          "$sdkmanager" --sdk_root="$sdk_root" --list_installed
 
       # Restores and saves Gradle's caches between runs.
       - name: Set up Gradle
