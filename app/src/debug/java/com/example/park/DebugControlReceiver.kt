@@ -20,9 +20,10 @@ import java.time.Instant
  * which likewise only merges into debug. scripts/check_release_manifest.py verifies that a release APK contains
  * neither. (It is exported so `adb shell am broadcast` can reach it - which is exactly why it must never ship.)
  *
- * Try it (emulator; car ids are shown by DUMP_STATE):
+ * Try it (emulator; car ids are shown by DUMP_STATE). lat/lng are sent as strings (--es) because `am broadcast --ed`
+ * doesn't exist on API 29; numeric extras are still accepted:
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.DUMP_STATE
- *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.PARK --el carId 1 --ed lat 37.7749 --ed lng -122.4194
+ *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.PARK --el carId 1 --es lat 37.7749 --es lng -122.4194
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.UNPARK --el carId 1
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.REARM
  * then read the answer with:  adb logcat -d -s ParkDebug
@@ -33,8 +34,12 @@ class DebugControlReceiver : BroadcastReceiver() {
         val action = intent.action ?: return
         val app = context.applicationContext
         val carId = intent.getLongExtra("carId", -1L)
-        val lat = intent.getDoubleExtra("lat", Double.NaN)
-        val lng = intent.getDoubleExtra("lng", Double.NaN)
+        // lat/lng arrive as strings (--es) because `am broadcast --ed` doesn't exist on API 29; numbers still work.
+        val extras = intent.extras
+        @Suppress("DEPRECATION") // Bundle.get is the only way to accept a String or a Double under the same key
+        val lat = DebugCoordinate.parse(extras?.get("lat"))
+        @Suppress("DEPRECATION")
+        val lng = DebugCoordinate.parse(extras?.get("lng"))
 
         // Same pattern as the app's other receivers: goAsync() keeps the process alive while the coroutine runs.
         val pending = goAsync()
@@ -55,11 +60,19 @@ class DebugControlReceiver : BroadcastReceiver() {
         }
     }
 
-    private suspend fun park(context: Context, carId: Long, lat: Double, lng: Double) {
-        if (carId < 0 || lat.isNaN() || lng.isNaN()) {
-            Log.w(TAG, "PARK needs --el carId <id> --ed lat <lat> --ed lng <lng> (got carId=$carId lat=$lat lng=$lng)")
+    private suspend fun park(context: Context, carId: Long, latExtra: DebugCoordinate, lngExtra: DebugCoordinate) {
+        // "PARK rejected: ..." is what scripts/debug_hooks.py turns into a non-zero exit.
+        val problems = listOfNotNull(
+            if (carId < 0) "carId is missing (send --el carId <id>)" else null,
+            latExtra.problem("lat"),
+            lngExtra.problem("lng"),
+        )
+        if (problems.isNotEmpty()) {
+            Log.w(TAG, "PARK rejected: ${problems.joinToString("; ")}")
             return
         }
+        val lat = (latExtra as DebugCoordinate.Value).degrees
+        val lng = (lngExtra as DebugCoordinate.Value).degrees
         val point = LatLng(lat, lng)
         val matches = findNearbySegmentMatches(context, point)
         val confidence = classifyMatch(matches)
@@ -76,7 +89,7 @@ class DebugControlReceiver : BroadcastReceiver() {
 
     private suspend fun unpark(context: Context, carId: Long) {
         if (carId < 0) {
-            Log.w(TAG, "UNPARK needs --el carId <id>")
+            Log.w(TAG, "UNPARK rejected: carId is missing (send --el carId <id>)")
             return
         }
         unsubscribeParking(context, carId)

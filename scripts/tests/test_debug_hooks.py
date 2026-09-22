@@ -64,8 +64,49 @@ class HooksTest(unittest.TestCase):
         self.assertIn("-n com.example.park/.DebugControlReceiver", command)
         self.assertIn("-a com.example.park.debug.PARK", command)
         self.assertIn("--el carId 3", command)        # a long
-        self.assertIn("--ed lat 37.7802", command)    # doubles
-        self.assertIn("--ed lng -122.461", command)
+        self.assertIn("--es lat 37.7802", command)    # strings: `am broadcast --ed` doesn't exist on API 29
+        self.assertIn("--es lng -122.461", command)
+        self.assertNotIn("--ed", command)
+
+    def test_broadcast_command_sends_coordinates_as_strings_and_the_car_as_a_long(self):
+        self.assertEqual(
+            "am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.PARK "
+            "--el carId 1 --es lat 37.7802 --es lng -122.461",
+            debug_hooks.broadcast_command("PARK", carId=1, lat=37.7802, lng=-122.461))
+        self.assertEqual("am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.UNPARK --el carId 4",
+                         debug_hooks.broadcast_command("UNPARK", carId=4))
+        self.assertEqual("am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.REARM",
+                         debug_hooks.broadcast_command("REARM"))
+
+    def test_broadcast_command_never_uses_an_option_missing_on_api_29(self):
+        command = debug_hooks.broadcast_command("PARK", carId=1, lat=0, lng=-0.000001)
+        self.assertNotIn("--ed", command)
+        self.assertIn("--es lat 0.0", command)  # an int still goes out as a parseable decimal
+
+    def test_broadcast_command_refuses_missing_or_non_numeric_coordinates(self):
+        for bad in (None, "abc", "", float("nan"), float("inf")):
+            with self.assertRaises(ScriptError, msg=repr(bad)) as ctx:
+                debug_hooks.broadcast_command("PARK", carId=1, lat=bad, lng=-122.4)
+            self.assertIn("lat must be a number", str(ctx.exception))
+        with self.assertRaises(ScriptError):
+            debug_hooks.broadcast_command("PARK", carId="one", lat=1.0, lng=2.0)
+
+    def test_park_with_a_bad_coordinate_sends_nothing(self):
+        device = FakeDevice()
+        with self.assertRaises(ScriptError):
+            debug_hooks.park(device, 1, float("nan"), -122.4)
+        self.assertFalse([c for c in device.commands if c.startswith("am broadcast")])
+
+    def test_a_rejected_reply_from_the_receiver_is_an_error(self):
+        device = FakeDevice(replies={"PARK": ["PARK rejected: lat is missing (send --es lat <degrees>)"]})
+        with self.assertRaises(ScriptError) as ctx:
+            debug_hooks.park(device, 1, 37.78, -122.46)
+        self.assertIn("PARK rejected: lat is missing", str(ctx.exception))
+
+    def test_main_exits_non_zero_when_the_receiver_rejects_the_request(self):
+        device = FakeDevice(replies={"PARK": ["PARK rejected: lng is not a number: 'x' (send --es lng <degrees>)"]})
+        with mock.patch.object(debug_hooks, "connect", return_value=device), mock.patch("sys.stderr"):
+            self.assertEqual(1, debug_hooks.main(["park"]))
 
     def test_dump_returns_the_reply_lines(self):
         device = FakeDevice(replies={"DUMP_STATE": ["DUMP_STATE begin: now=x", "cars: id=1", "DUMP_STATE end: the app expects 3 future alarm(s)"]})

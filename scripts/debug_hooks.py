@@ -19,6 +19,7 @@ Other emulator helpers: `adb emu geo fix <lon> <lat>` sets the emulator's GPS lo
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 import time
@@ -46,13 +47,30 @@ def device_marker(adb: Adb) -> str:
     return adb.shell("date '+%m-%d %H:%M:%S.000'").out.strip()
 
 
-def send(adb: Adb, name: str, **extras) -> None:
-    """Send one action to the receiver. extras: carId (long), lat / lng (double)."""
+def broadcast_command(name: str, **extras) -> str:
+    """The `am broadcast` line for one action. carId is a long (--el). lat / lng go as STRINGS (--es): `am broadcast --ed`
+    doesn't exist on Android 10 (API 29), and the receiver parses the text. A missing or non-numeric value is refused
+    here, before anything is sent."""
     command = f"am broadcast -n {RECEIVER} -a {ACTION_PREFIX}{name}"
     for key, value in extras.items():
-        flag = "--el" if key == "carId" else "--ed"
-        command += f" {flag} {key} {value}"
-    result = adb.shell(command)
+        if key == "carId":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ScriptError(f"carId must be a whole number (got {value!r}).")
+            command += f" --el carId {value}"
+        else:
+            try:
+                degrees = float(value)
+            except (TypeError, ValueError):
+                degrees = math.nan
+            if not math.isfinite(degrees):
+                raise ScriptError(f"{key} must be a number (got {value!r}).")
+            command += f" --es {key} {degrees!r}"
+    return command
+
+
+def send(adb: Adb, name: str, **extras) -> None:
+    """Send one action to the receiver. extras: carId (long), lat / lng (degrees, sent as strings)."""
+    result = adb.shell(broadcast_command(name, **extras))
     if "Broadcast completed" not in result.out:
         raise ScriptError(f"The broadcast wasn't delivered: {(result.out or result.err).strip()}")
 
@@ -70,6 +88,10 @@ def call(adb: Adb, name: str, done_prefix: str, **extras) -> List[str]:
     deadline = time.monotonic() + REPLY_TIMEOUT
     while time.monotonic() < deadline:
         lines = read_replies(adb, since)
+        # The receiver answers "<ACTION> rejected: ..." when an extra is missing or isn't a number.
+        rejected = [message_of(line) for line in lines if message_of(line).startswith(f"{name} rejected")]
+        if rejected:
+            raise ScriptError(rejected[0])
         if any(message_of(line).startswith(done_prefix) for line in lines):
             return lines
         time.sleep(0.5)

@@ -100,6 +100,24 @@ class FakeDevice(Adb):
         raise AssertionError(f"unexpected adb call: {args}")
 
 
+class UnreadableDumpDevice(FakeDevice):
+    """Its `dumpsys alarm` has an alarm line in a layout the parser doesn't know."""
+
+    def shell(self, command, allow_fail=False, timeout=120):
+        if command == "dumpsys alarm":
+            return Result(0, f"    RTC_WAKEUP #0: Alarm{{ab weird-layout {PACKAGE}}}\n", "")
+        return super().shell(command, allow_fail, timeout)
+
+
+class Api29Device(FakeDevice):
+    """Serves the REAL dumpsys captured from the API 29 emulator (5 alarms of the app, plus a platform placeholder)."""
+
+    def shell(self, command, allow_fail=False, timeout=120):
+        if command == "dumpsys alarm":
+            return Result(0, (Path(__file__).parent / "fixtures" / "dumpsys-alarm-api29-emulator.txt").read_text(encoding="utf-8"), "")
+        return super().shell(command, allow_fail, timeout)
+
+
 class TerminalStdin(io.StringIO):
     def isatty(self):
         return True
@@ -237,6 +255,23 @@ class PhoneSafetyTest(ClockedTest):
             self.assertEqual(rearm_check.EXIT_PASS, rearm_check.run_check(phone, "boot"))
         prompts = [call.args[0] for call in fake_input.call_args_list]
         self.assertTrue(any("Unlock the phone" in p for p in prompts), prompts)
+
+
+class UnreadableDumpTest(ClockedTest):
+    """A dump that can't be read is an ERROR (exit 1): never 'no alarms' (a precondition, exit 2) and never a pass."""
+
+    def test_an_unreadable_dump_is_an_error_not_a_precondition(self):
+        with self.assertRaises(ScriptError) as ctx:
+            rearm_check.require_alarms(UnreadableDumpDevice())
+        self.assertNotIsInstance(ctx.exception, rearm_check.PreconditionFailed)
+        self.assertIn("NOT understood", str(ctx.exception))
+
+    def test_main_exits_1_for_an_unreadable_dump(self):
+        with mock.patch.object(rearm_check, "connect", return_value=UnreadableDumpDevice()), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(rearm_check.EXIT_FAIL, rearm_check.main(["--mode", "foreground"]))
+
+    def test_the_real_api29_dump_yields_five_alarms_to_check(self):
+        self.assertEqual(5, len(rearm_check.require_alarms(Api29Device())))
 
 
 if __name__ == "__main__":
