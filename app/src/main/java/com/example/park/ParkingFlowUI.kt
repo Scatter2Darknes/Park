@@ -37,6 +37,11 @@ sealed class ParkingFlowState {
     data class Confirming(val carId: Long, val match: SegmentMatch, val point: LatLng) : ParkingFlowState()
     data class PickingManually(val carId: Long, val candidates: List<SegmentMatch>, val point: LatLng) : ParkingFlowState()
 
+    // True no-match: not one nearby-but-too-far/ambiguous candidate, but zero candidates at
+    // all — a garage, driveway or private lot with no street-cleaning data anywhere nearby.
+    // See proceedToMatching's routing and saveUnmanagedParkedState.
+    data class NoStreetNearby(val carId: Long, val point: LatLng) : ParkingFlowState()
+
     // Confirmation step for the "select from map" escape hatch specifically — every other
     // selection path (distance-sorted list, manual picker) already shows the street/side back
     // to the user before committing; a map tap had no equivalent check before this.

@@ -43,8 +43,17 @@ suspend fun proceedToMatching(context: android.content.Context, carId: Long, poi
     val matches = findNearbySegmentMatches(context, point)
     return when (classifyMatch(matches)) {
         MatchConfidence.CONFIDENT -> ParkingFlowState.Confirming(carId, matches.first(), point)
-        MatchConfidence.AMBIGUOUS, MatchConfidence.NO_MATCH ->
-            ParkingFlowState.PickingManually(carId, matches, point)
+        MatchConfidence.AMBIGUOUS -> ParkingFlowState.PickingManually(carId, matches, point)
+        // NO_MATCH covers both "zero candidates at all" and "closest candidate is present but
+        // over 30m away" (see classifyMatch). Only the former is a genuine no-street-nearby
+        // situation (a garage, say) — the latter still has a real, if distant, candidate the
+        // manual picker's list and "select from map" escape hatch can offer, so it keeps going
+        // to PickingManually exactly as before. Strict on purpose: a middle ground here (e.g.
+        // routing a lone 45m-away candidate to NoStreetNearby too) is a real possibility but
+        // was left as a deliberate non-decision — see the feature spec's open-question note.
+        MatchConfidence.NO_MATCH ->
+            if (matches.isEmpty()) ParkingFlowState.NoStreetNearby(carId, point)
+            else ParkingFlowState.PickingManually(carId, matches, point)
     }
 }
 

@@ -1119,11 +1119,22 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
 
                                 val mostUrgentDeadline = mostUrgent.soonestDeadline()
-                                val countdownText = mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                // Only when there's truly no risk of any kind (no sweep segment
+                                // AND no deadline computed at all \u2014 see saveUnmanagedParkedState)
+                                // does this get the distinct "safe" treatment below. A real
+                                // segment whose schedule just failed to resolve also has a null
+                                // deadline but keeps the existing "?" \u2014 that's a data gap, not a
+                                // confirmed safe spot, and shouldn't be relabeled as one.
+                                val mostUrgentUnmanaged = mostUrgent.parkedState?.segmentBlockSweepId == null && mostUrgentDeadline == null
+                                val countdownText = when {
+                                    mostUrgentUnmanaged -> "No cleaning risk"
+                                    else -> mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                }
                                 Text(
                                     text = "${mostUrgent.car.name} \u2014 $countdownText" +
                                             (if (mostUrgentDeadline?.kind == DeadlineKind.RPP) " \u00b7 RPP limit" else ""),
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (mostUrgentUnmanaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
                                 )
 
                                 if (activeParkedCars.size > 1) {
@@ -1149,13 +1160,22 @@ fun MapScreen(
 
                                 activeParkedCars.forEach { item ->
                                     val itemDeadline = item.soonestDeadline()
-                                    val itemNextText = itemDeadline?.let {
-                                        val dt = java.time.Instant.ofEpochMilli(it.millis)
-                                            .atZone(SF_ZONE)
-                                        val base = formatSweepDateTime(dt)
-                                        if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
-                                    } ?: "No cleaning schedule found"
-                                    val itemCountdown = itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                    // Same distinction as the collapsed row above: only a car
+                                    // with no segment AND no deadline at all gets the "safe"
+                                    // wording/color; a real segment with an unresolvable
+                                    // schedule keeps the existing ambiguous fallback text.
+                                    val itemUnmanaged = item.parkedState?.segmentBlockSweepId == null && itemDeadline == null
+                                    val itemNextText = when {
+                                        itemUnmanaged -> "Not a street cleaning risk"
+                                        else -> itemDeadline?.let {
+                                            val dt = java.time.Instant.ofEpochMilli(it.millis)
+                                                .atZone(SF_ZONE)
+                                            val base = formatSweepDateTime(dt)
+                                            if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
+                                        } ?: "No cleaning schedule found"
+                                    }
+                                    val itemCountdown = if (itemUnmanaged) "—" else itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                    val itemTextColor = if (itemUnmanaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
 
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1176,12 +1196,13 @@ fun MapScreen(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
-                                            Text(itemNextText, style = MaterialTheme.typography.bodySmall)
+                                            Text(itemNextText, style = MaterialTheme.typography.bodySmall, color = itemTextColor)
                                         }
                                         Text(
                                             itemCountdown,
                                             fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.bodyMedium
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = itemTextColor
                                         )
                                     }
                                 }
@@ -1610,6 +1631,32 @@ fun MapScreen(
                     parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
                 },
                 onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+            )
+            is ParkingFlowState.NoStreetNearby -> AlertDialog(
+                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                title = { Text("No nearby streets found") },
+                text = {
+                    Column {
+                        Text("We couldn't find any street-cleaning data near this spot — a garage, driveway or private lot, maybe?")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextButton(onClick = {
+                            scope.launch {
+                                saveUnmanagedParkedState(context, state.carId, state.point)
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
+                        }) { Text("Not a street cleaning risk spot") }
+                        TextButton(onClick = {
+                            // The matcher just missed a real nearby street — fall through to
+                            // the same "tap a street on the map" escape hatch PickingManually
+                            // already offers, rather than assuming this really is unmanaged.
+                            parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
+                        }) { Text("Select from map instead") }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { parkingFlowState = ParkingFlowState.Hidden }) { Text("Cancel") } }
             )
             is ParkingFlowState.PickingViaMap -> {
                 MapInstructionBanner(text = "Tap a street on the map to select it")
