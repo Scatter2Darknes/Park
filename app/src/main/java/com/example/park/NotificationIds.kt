@@ -53,7 +53,10 @@ object NotificationIds {
         BLUETOOTH_AUTO_UNPARK(8 * SPAN),
         /** A car's ParkedState was re-evaluated because a SavedLocation's safe-from-sweeping
          *  flag changed (edited or deleted) — see SavedLocationRecompute.kt. */
-        SAVED_LOCATION_RECOMPUTE(9 * SPAN)
+        SAVED_LOCATION_RECOMPUTE(9 * SPAN),
+        /** Manual meter timer — a single user-typed deadline, no tiers, no delivery markers
+         *  (see MeterTimer.kt). */
+        METER_TIMER(10 * SPAN)
     }
 
     /**
