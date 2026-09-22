@@ -95,6 +95,7 @@ fun SettingsScreen(
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
     var tunnelAutoDimEnabled by remember { mutableStateOf(SettingsDefaults.TUNNEL_AUTO_DIM_ENABLED) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
+    var showMeterBadges by remember { mutableStateOf(SettingsDefaults.SHOW_METER_BADGES) }
     var tileCacheMaxMb by remember { mutableStateOf(SettingsDefaults.TILE_CACHE_MAX_MB) }
     var confirmingClearCache by remember { mutableStateOf(false) }
     var stadiaApiKeyOverride by remember { mutableStateOf("") }
@@ -119,6 +120,19 @@ fun SettingsScreen(
     var lastRefreshMillis by remember { mutableStateOf<Long?>(null) }
     val isSyncBusy by StreetDataSyncCenter.isBusy.collectAsState()
     val syncStatusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
+    // Live per-feed progress, mirroring what SyncStatusDialog (the Setup UI) already shows —
+    // this section previously had none of this, only the final syncStatusMessage above.
+    val isSyncRunningInBackground by StreetDataSyncCenter.isSyncRunning.collectAsState()
+    val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
+    val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
+    val segmentPhaseCompleted by StreetDataSyncCenter.segmentPhaseCompleted.collectAsState()
+    val rppCurrentAttemptFetchedCount by StreetDataSyncCenter.rppCurrentAttemptFetchedCount.collectAsState()
+    val rppCurrentAttemptTotalCount by StreetDataSyncCenter.rppCurrentAttemptTotalCount.collectAsState()
+    val rppPhaseCompleted by StreetDataSyncCenter.rppPhaseCompleted.collectAsState()
+    val meterCurrentAttemptPhase by StreetDataSyncCenter.meterCurrentAttemptPhase.collectAsState()
+    val meterCurrentAttemptFetchedCount by StreetDataSyncCenter.meterCurrentAttemptFetchedCount.collectAsState()
+    val meterCurrentAttemptTotalCount by StreetDataSyncCenter.meterCurrentAttemptTotalCount.collectAsState()
+    val meterPhaseCompleted by StreetDataSyncCenter.meterPhaseCompleted.collectAsState()
     var offsetMenuExpanded by remember { mutableStateOf(false) }
     var urgentOffsetMenuExpanded by remember { mutableStateOf(false) }
     var informationalTimeoutMinutes by remember { mutableStateOf(SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES) }
@@ -150,6 +164,7 @@ fun SettingsScreen(
         showImminentCountdown = settings.showImminentCountdown.first()
         tunnelAutoDimEnabled = settings.tunnelAutoDimEnabled.first()
         showRppZoneLabels = settings.showRppZoneLabels.first()
+        showMeterBadges = settings.showMeterBadges.first()
         tileCacheMaxMb = settings.tileCacheMaxMb.first()
         cacheSizeBytes = tileCacheSizeBytes()
         lastRefreshMillis = settings.lastRefreshMillis.first()
@@ -849,6 +864,28 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(16.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Show meter badges", style = MaterialTheme.typography.labelMedium)
+                DescriptionToggle(
+                    "Shows a \"$ Metered\" badge on nearby currently-enforced parking meters " +
+                            "— separate from street cleaning, since a curb can be both swept " +
+                            "and metered at once."
+                )
+            }
+            Switch(
+                checked = showMeterBadges,
+                onCheckedChange = { checked ->
+                    showMeterBadges = checked
+                    scope.launch { settings.setShowMeterBadges(checked) }
+                }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
@@ -1046,6 +1083,33 @@ fun SettingsScreen(
             enabled = !isSyncBusy
         ) {
             Text(if (isSyncBusy) "Refreshing\u2026" else "Refresh Data Now")
+        }
+        // Same three-line simultaneous progress SyncStatusDialog shows \u2014 all three feeds visible
+        // together (segments, then RPP zone regulations, then meters, in the order they actually
+        // run \u2014 see StreetDataSyncCenter/MeteredZoneRepository), so a feed that finishes
+        // quickly doesn't just vanish while a slower one is still going. Previously this section
+        // showed nothing at all while a refresh was in flight, only the final syncStatusMessage
+        // below once everything finished. isSyncRunningInBackground covers the periodic worker
+        // (isSyncBusy alone only reflects a manual "Refresh Data Now" tap or an import).
+        if (isSyncBusy || isSyncRunningInBackground) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatSyncPhaseLine("segments", currentAttemptFetchedCount, currentAttemptTotalCount, segmentPhaseCompleted),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatSyncPhaseLine("RPP zone regulations", rppCurrentAttemptFetchedCount, rppCurrentAttemptTotalCount, rppPhaseCompleted),
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatSyncPhaseLine(
+                    "metered zones", meterCurrentAttemptFetchedCount, meterCurrentAttemptTotalCount,
+                    meterPhaseCompleted, activeLabel = meterCurrentAttemptPhase
+                ),
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         syncStatusMessage?.let {
             Spacer(Modifier.height(4.dp))

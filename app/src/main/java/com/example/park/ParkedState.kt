@@ -31,7 +31,19 @@ data class ParkedState(
     val normalDeliveredForMillis: Long? = null,
     val urgentDeliveredForMillis: Long? = null,
     val rppNormalDeliveredForMillis: Long? = null,
-    val rppUrgentDeliveredForMillis: Long? = null
+    val rppUrgentDeliveredForMillis: Long? = null,
+    // Set only when this row was saved unmanaged BECAUSE it matched a safe-tagged SavedLocation
+    // (see findSafeSavedLocation / saveUnmanagedParkedState's viaSafeLocationId param) — null for
+    // a real managed park, AND for an unmanaged park from the manual "not a street cleaning risk
+    // spot" flow (NoStreetNearby), which has nothing to do with any SavedLocation. This is what
+    // lets a SavedLocation edit/delete recompute (SavedLocationRecompute.kt) find exactly the
+    // cars it's responsible for, without ever touching a manually-marked-safe spot.
+    val parkedViaSafeLocationId: Long? = null,
+    // The deadline of the currently-scheduled manual meter timer (see MeterTimer.kt), or null
+    // if none is set. Persisted here (not just as a bare AlarmManager alarm) so the map's
+    // priority banner and the widget can show it alongside the sweep/RPP deadline — see
+    // soonestDeadline() in CarActions.kt.
+    val meterTimerAtMillis: Long? = null
 ) {
     /** The deadline [kind]'s reminder was last delivered for, or null if it never was. */
     fun deliveredForMillis(kind: ReminderKind): Long? = when (kind) {
@@ -70,6 +82,15 @@ interface ParkedStateDao {
 
     @Query("DELETE FROM parked_state WHERE carId = :carId")
     suspend fun clearForCar(carId: Long)
+
+    @Query("SELECT * FROM parked_state WHERE parkedViaSafeLocationId = :locationId")
+    suspend fun getForSafeLocation(locationId: Long): List<ParkedState>
+
+    // Not guarded by parkedAtMillis like the delivery markers above: a meter timer is a
+    // manually-triggered, low-stakes action (not part of the automatic re-arm/roll-forward
+    // machinery those guard against racing), so a plain carId-keyed update is enough.
+    @Query("UPDATE parked_state SET meterTimerAtMillis = :meterTimerAtMillis WHERE carId = :carId")
+    suspend fun updateMeterTimer(carId: Long, meterTimerAtMillis: Long?)
 
     // One update per marker column. Every one is guarded by parkedAtMillis so a delivery that
     // races a re-park (a reminder for the OLD spot firing just as the row is replaced) matches

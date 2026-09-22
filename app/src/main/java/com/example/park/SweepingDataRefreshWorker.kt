@@ -28,6 +28,17 @@ class SweepingDataRefreshWorker(
                 android.util.Log.e("RppSync", "Background RPP refresh failed", e)
             }
 
+            // Same pattern as RPP above — a secondary layer, own try/catch so it can never fail
+            // this worker's Result.
+            try {
+                val meterCount = MeteredZoneRepository(applicationContext).refreshFromNetwork()
+                android.util.Log.d("MeterSync", "Background refresh complete: $meterCount metered zones")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("MeterSync", "Background meter refresh failed", e)
+            }
+
             Result.success()
         } catch (e: CancellationException) {
             // The system stopped this worker (a constraint like network connectivity

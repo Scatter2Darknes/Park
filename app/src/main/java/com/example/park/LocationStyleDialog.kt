@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -39,7 +40,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun LocationStyleDialog(
     location: SavedLocation,
-    onSave: (name: String, colorHex: String, iconEmoji: String, photoPath: String?) -> Unit,
+    onSave: (name: String, colorHex: String, iconEmoji: String, photoPath: String?, isSafeFromSweeping: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -49,6 +50,9 @@ fun LocationStyleDialog(
     var selectedColor by remember { mutableStateOf(location.colorHex ?: DEFAULT_LOCATION_COLOR_HEX) }
     var selectedIcon by remember { mutableStateOf(location.iconEmoji ?: DEFAULT_LOCATION_ICON) }
     var pendingPhotoPath by remember { mutableStateOf(location.photoPath) }
+    // isSafeFromSweeping is nullable in the DB (null = "not marked safe" — see MIGRATION_15_16),
+    // so == true is the correct null-safe read here.
+    var isSafeFromSweeping by remember { mutableStateOf(location.isSafeFromSweeping == true) }
     var isProcessingPhoto by remember { mutableStateOf(false) }
     var cropSourceBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -135,11 +139,28 @@ fun LocationStyleDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.clickable { isSafeFromSweeping = !isSafeFromSweeping }
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Safe from street cleaning", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "e.g. a garage or driveway. Parking here — manually, or via " +
+                                    "Bluetooth auto-park — skips street-sweeping matching entirely.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = isSafeFromSweeping, onCheckedChange = { isSafeFromSweeping = it })
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath) },
+                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath, isSafeFromSweeping) },
                 enabled = editedName.isNotBlank()
             ) { Text("Save") }
         },

@@ -1,0 +1,523 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 16,
+    "identityHash": "b77229faa0f1d360fdaec1d42bd3326d",
+    "entities": [
+      {
+        "tableName": "street_segment",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blockSweepId` TEXT NOT NULL, `cnn` TEXT NOT NULL, `corridor` TEXT NOT NULL, `limits` TEXT NOT NULL, `cnnRightLeft` TEXT NOT NULL, `blockSide` TEXT NOT NULL, `fullName` TEXT NOT NULL, `fromHour` INTEGER NOT NULL, `toHour` INTEGER NOT NULL, `week1` INTEGER NOT NULL, `week2` INTEGER NOT NULL, `week3` INTEGER NOT NULL, `week4` INTEGER NOT NULL, `week5` INTEGER NOT NULL, `holidays` INTEGER NOT NULL, `points` TEXT NOT NULL, `centroidLat` REAL NOT NULL, `centroidLng` REAL NOT NULL, `lastSeenSyncId` INTEGER, PRIMARY KEY(`blockSweepId`))",
+        "fields": [
+          {
+            "fieldPath": "blockSweepId",
+            "columnName": "blockSweepId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cnn",
+            "columnName": "cnn",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "corridor",
+            "columnName": "corridor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "limits",
+            "columnName": "limits",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cnnRightLeft",
+            "columnName": "cnnRightLeft",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockSide",
+            "columnName": "blockSide",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fullName",
+            "columnName": "fullName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fromHour",
+            "columnName": "fromHour",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "toHour",
+            "columnName": "toHour",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week1",
+            "columnName": "week1",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week2",
+            "columnName": "week2",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week3",
+            "columnName": "week3",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week4",
+            "columnName": "week4",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week5",
+            "columnName": "week5",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "holidays",
+            "columnName": "holidays",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "points",
+            "columnName": "points",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centroidLat",
+            "columnName": "centroidLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centroidLng",
+            "columnName": "centroidLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSeenSyncId",
+            "columnName": "lastSeenSyncId",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blockSweepId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_street_segment_cnn_cnnRightLeft",
+            "unique": false,
+            "columnNames": [
+              "cnn",
+              "cnnRightLeft"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_street_segment_cnn_cnnRightLeft` ON `${TABLE_NAME}` (`cnn`, `cnnRightLeft`)"
+          }
+        ]
+      },
+      {
+        "tableName": "car",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `isDefault` INTEGER NOT NULL, `bluetoothDeviceAddress` TEXT, `colorHex` TEXT, `iconEmoji` TEXT, `photoPath` TEXT, `widgetTextColorHex` TEXT, `permitZoneLetters` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDefault",
+            "columnName": "isDefault",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bluetoothDeviceAddress",
+            "columnName": "bluetoothDeviceAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "colorHex",
+            "columnName": "colorHex",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "iconEmoji",
+            "columnName": "iconEmoji",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photoPath",
+            "columnName": "photoPath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "widgetTextColorHex",
+            "columnName": "widgetTextColorHex",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "permitZoneLetters",
+            "columnName": "permitZoneLetters",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "parked_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `carId` INTEGER NOT NULL, `segmentBlockSweepId` TEXT, `sideConfirmed` INTEGER NOT NULL, `parkedLat` REAL NOT NULL, `parkedLng` REAL NOT NULL, `exactPinLat` REAL, `exactPinLng` REAL, `parkedAtMillis` INTEGER NOT NULL, `nextSweepAtMillis` INTEGER, `notificationScheduled` INTEGER NOT NULL, `rppRegulationId` TEXT, `normalDeliveredForMillis` INTEGER, `urgentDeliveredForMillis` INTEGER, `rppNormalDeliveredForMillis` INTEGER, `rppUrgentDeliveredForMillis` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "carId",
+            "columnName": "carId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "segmentBlockSweepId",
+            "columnName": "segmentBlockSweepId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sideConfirmed",
+            "columnName": "sideConfirmed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parkedLat",
+            "columnName": "parkedLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parkedLng",
+            "columnName": "parkedLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exactPinLat",
+            "columnName": "exactPinLat",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "exactPinLng",
+            "columnName": "exactPinLng",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "parkedAtMillis",
+            "columnName": "parkedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nextSweepAtMillis",
+            "columnName": "nextSweepAtMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notificationScheduled",
+            "columnName": "notificationScheduled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rppRegulationId",
+            "columnName": "rppRegulationId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "normalDeliveredForMillis",
+            "columnName": "normalDeliveredForMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "urgentDeliveredForMillis",
+            "columnName": "urgentDeliveredForMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rppNormalDeliveredForMillis",
+            "columnName": "rppNormalDeliveredForMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rppUrgentDeliveredForMillis",
+            "columnName": "rppUrgentDeliveredForMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_parked_state_carId",
+            "unique": true,
+            "columnNames": [
+              "carId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_parked_state_carId` ON `${TABLE_NAME}` (`carId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "saved_location",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `lat` REAL NOT NULL, `lng` REAL NOT NULL, `colorHex` TEXT, `iconEmoji` TEXT, `photoPath` TEXT, `isSafeFromSweeping` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lng",
+            "columnName": "lng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "colorHex",
+            "columnName": "colorHex",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "iconEmoji",
+            "columnName": "iconEmoji",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photoPath",
+            "columnName": "photoPath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isSafeFromSweeping",
+            "columnName": "isSafeFromSweeping",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "schedule_override",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blockSweepId` TEXT NOT NULL, `fullName` TEXT NOT NULL, `week1` INTEGER NOT NULL, `week2` INTEGER NOT NULL, `week3` INTEGER NOT NULL, `week4` INTEGER NOT NULL, `week5` INTEGER NOT NULL, `fromHour` INTEGER NOT NULL, `toHour` INTEGER NOT NULL, `notes` TEXT, PRIMARY KEY(`blockSweepId`))",
+        "fields": [
+          {
+            "fieldPath": "blockSweepId",
+            "columnName": "blockSweepId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fullName",
+            "columnName": "fullName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week1",
+            "columnName": "week1",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week2",
+            "columnName": "week2",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week3",
+            "columnName": "week3",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week4",
+            "columnName": "week4",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "week5",
+            "columnName": "week5",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fromHour",
+            "columnName": "fromHour",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "toHour",
+            "columnName": "toHour",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blockSweepId"
+          ]
+        }
+      },
+      {
+        "tableName": "rpp_zone_regulation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`objectId` TEXT NOT NULL, `zoneLetters` TEXT NOT NULL, `days` TEXT NOT NULL, `hrsBegin` INTEGER NOT NULL, `hrsEnd` INTEGER NOT NULL, `hrLimit` REAL NOT NULL, `limitAssumed` INTEGER, `points` TEXT NOT NULL, `centroidLat` REAL NOT NULL, `centroidLng` REAL NOT NULL, `lastSeenSyncId` INTEGER, PRIMARY KEY(`objectId`))",
+        "fields": [
+          {
+            "fieldPath": "objectId",
+            "columnName": "objectId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "zoneLetters",
+            "columnName": "zoneLetters",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "days",
+            "columnName": "days",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hrsBegin",
+            "columnName": "hrsBegin",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hrsEnd",
+            "columnName": "hrsEnd",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hrLimit",
+            "columnName": "hrLimit",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "limitAssumed",
+            "columnName": "limitAssumed",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "points",
+            "columnName": "points",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centroidLat",
+            "columnName": "centroidLat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "centroidLng",
+            "columnName": "centroidLng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSeenSyncId",
+            "columnName": "lastSeenSyncId",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "objectId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b77229faa0f1d360fdaec1d42bd3326d')"
+    ]
+  }
+}

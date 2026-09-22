@@ -8,22 +8,23 @@ import java.time.ZoneId
 // reload() the same way sweep data already is.
 data class CarWithStatus(val car: Car, val parkedState: ParkedState?, val rppDeadline: RppWarning? = null)
 
-enum class DeadlineKind { SWEEP, RPP }
+enum class DeadlineKind { SWEEP, RPP, METER }
 data class CarDeadline(val millis: Long, val kind: DeadlineKind)
 
 /**
- * Whichever binding deadline is sooner for this car — sweep start or RPP non-permit move-by —
- * since a parked car can have either, both, or neither. Backs every place that ranks/displays
- * "the thing this car needs to move for" (the map's priority banner, the widget), so none of
- * them silently ignore an RPP deadline that's more urgent than (or the only) deadline sweep
- * data alone would show.
+ * Whichever binding deadline is sooner for this car — sweep start, RPP non-permit move-by, or
+ * a manually-set meter timer — since a parked car can have any combination of these, or none.
+ * Backs every place that ranks/displays "the thing this car needs to move for" (the map's
+ * priority banner, the widget), so none of them silently ignore a deadline that's more urgent
+ * than (or the only) one sweep data alone would show.
  */
 fun CarWithStatus.soonestDeadline(): CarDeadline? {
     val sweep = parkedState?.nextSweepAtMillis?.let { CarDeadline(it, DeadlineKind.SWEEP) }
     val rpp = rppDeadline?.moveByDateTime
         ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         ?.let { CarDeadline(it, DeadlineKind.RPP) }
-    return listOfNotNull(sweep, rpp).minByOrNull { it.millis }
+    val meter = parkedState?.meterTimerAtMillis?.let { CarDeadline(it, DeadlineKind.METER) }
+    return listOfNotNull(sweep, rpp, meter).minByOrNull { it.millis }
 }
 
 suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {

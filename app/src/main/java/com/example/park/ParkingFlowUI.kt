@@ -37,12 +37,37 @@ sealed class ParkingFlowState {
     data class Confirming(val carId: Long, val match: SegmentMatch, val point: LatLng) : ParkingFlowState()
     data class PickingManually(val carId: Long, val candidates: List<SegmentMatch>, val point: LatLng) : ParkingFlowState()
 
+    // True no-match: not one nearby-but-too-far/ambiguous candidate, but zero candidates at
+    // all — a garage, driveway or private lot with no street-cleaning data anywhere nearby.
+    // See proceedToMatching's routing and saveUnmanagedParkedState.
+    data class NoStreetNearby(val carId: Long, val point: LatLng) : ParkingFlowState()
+
+    // The manual "I'm Parked" point matched a safe-tagged Saved Location (see
+    // MapScreen.kt's resolveParkingFlow) — being near it isn't proof the car is actually IN
+    // the garage rather than legally parked on the street out front, so this asks instead of
+    // assuming (unlike Bluetooth auto-park, where the assumption is fine).
+    data class ConfirmingSafeLocation(val carId: Long, val location: SavedLocation, val point: LatLng) : ParkingFlowState()
+
     // Confirmation step for the "select from map" escape hatch specifically — every other
     // selection path (distance-sorted list, manual picker) already shows the street/side back
     // to the user before committing; a map tap had no equivalent check before this.
     data class ConfirmingSide(val carId: Long, val segment: StreetSegment, val point: LatLng) : ParkingFlowState()
 
     data class AskingForPin(val carId: Long, val segment: StreetSegment, val point: LatLng) : ParkingFlowState()
+
+    // Offered as an extra option from AskingForPin when a confident, currently-enforced
+    // MeteredZone match exists for the point — see MapScreen.kt. Not a MovedCarAction-style
+    // auto-decision: the user types the actual deadline themselves (see MeterTimer.kt).
+    // [exactPin], when non-null, is a manually-dropped pin (see DroppingPin) that must be
+    // preserved through to the eventual saveParkedState call — without it, confirming a timer
+    // here would silently save a highlight-only park and lose the pin the user just placed.
+    data class AskingForMeterTimer(
+        val carId: Long,
+        val segment: StreetSegment,
+        val point: LatLng,
+        val meter: MeteredZone,
+        val exactPin: LatLng? = null
+    ) : ParkingFlowState()
 
     data class DroppingPin(val carId: Long, val segment: StreetSegment, val originalPoint: LatLng) : ParkingFlowState()
 

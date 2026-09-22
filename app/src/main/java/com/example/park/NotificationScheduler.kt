@@ -91,7 +91,9 @@ fun snoozeReminder(
  * instead of silently getting nothing. Both variants use the same [pendingIntent], so a later
  * exact set (after the permission is granted) simply replaces the inexact one.
  */
-private fun setAlarm(
+// Not private: MeterTimer.kt reuses this same exact-vs-inexact-fallback logic for the manual
+// meter timer alarm, which isn't part of the tiered sweep/RPP system this file otherwise owns.
+fun setAlarm(
     alarmManager: AlarmManager,
     exactAlarmsAllowed: Boolean,
     triggerAtMillis: Long,
@@ -449,6 +451,9 @@ fun cancelParkingReminder(context: Context, carId: Long) {
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT))
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_UNPARK))
     cancelRppReminder(context, carId)
+    // A manual meter timer belongs to the spot it was set at, same as everything else here —
+    // stale once the car is no longer parked there.
+    cancelMeterTimer(context, carId)
 }
 
 /** An RPP deadline plus the two epoch-millis values derived from it. */

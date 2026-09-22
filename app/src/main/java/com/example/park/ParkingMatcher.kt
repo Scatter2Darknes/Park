@@ -43,10 +43,41 @@ suspend fun proceedToMatching(context: android.content.Context, carId: Long, poi
     val matches = findNearbySegmentMatches(context, point)
     return when (classifyMatch(matches)) {
         MatchConfidence.CONFIDENT -> ParkingFlowState.Confirming(carId, matches.first(), point)
-        MatchConfidence.AMBIGUOUS, MatchConfidence.NO_MATCH ->
-            ParkingFlowState.PickingManually(carId, matches, point)
+        MatchConfidence.AMBIGUOUS -> ParkingFlowState.PickingManually(carId, matches, point)
+        // NO_MATCH covers both "zero candidates at all" and "closest candidate is present but
+        // over 30m away" (see classifyMatch). Only the former is a genuine no-street-nearby
+        // situation (a garage, say) — the latter still has a real, if distant, candidate the
+        // manual picker's list and "select from map" escape hatch can offer, so it keeps going
+        // to PickingManually exactly as before. Strict on purpose: a middle ground here (e.g.
+        // routing a lone 45m-away candidate to NoStreetNearby too) is a real possibility but
+        // was left as a deliberate non-decision — see the feature spec's open-question note.
+        MatchConfidence.NO_MATCH ->
+            if (matches.isEmpty()) ParkingFlowState.NoStreetNearby(carId, point)
+            else ParkingFlowState.PickingManually(carId, matches, point)
     }
 }
+
+// Tighter than the 30m street-matching confidence radius: a false match here skips segment/RPP
+// matching entirely (see SavedLocation.isSafeFromSweeping), so this should only fire when the
+// point is essentially AT the saved location, not just generally nearby it. Not private:
+// SavedLocationRecompute.kt reuses the exact same radius when a location's safe flag changes.
+const val SAFE_LOCATION_MATCH_RADIUS_METERS = 25.0
+
+/**
+ * The closest safe-tagged Saved Location to [point], if one is within
+ * [SAFE_LOCATION_MATCH_RADIUS_METERS] — null otherwise. A location must be explicitly marked
+ * safe in Settings first (LocationStyleDialog); this never infers it from a parking event. See
+ * the doc comments on startParkingFlow's resolveParkingFlow (MapScreen.kt) and
+ * performAutoDetectPark (BluetoothDisconnectReceiver.kt) for the two places this short-circuits
+ * the normal segment-matching flow.
+ */
+suspend fun findSafeSavedLocation(context: android.content.Context, point: LatLng): SavedLocation? =
+    AppDatabase.getInstance(context).savedLocationDao().getAll()
+        .filter { it.isSafeFromSweeping == true }
+        .map { it to distanceMetersBetween(point, it.toLatLng()) }
+        .filter { (_, distance) -> distance <= SAFE_LOCATION_MATCH_RADIUS_METERS }
+        .minByOrNull { (_, distance) -> distance }
+        ?.first
 
 suspend fun refreshParkedInfo(context: android.content.Context, carId: Long): ParkedState? {
     return AppDatabase.getInstance(context).parkedStateDao().getForCar(carId)

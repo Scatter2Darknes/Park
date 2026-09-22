@@ -58,6 +58,7 @@ object SettingsKeys {
     val SHOW_IMMINENT_COUNTDOWN = booleanPreferencesKey("show_imminent_countdown")
     val TUNNEL_AUTO_DIM_ENABLED = booleanPreferencesKey("tunnel_auto_dim_enabled")
     val SHOW_RPP_ZONE_LABELS = booleanPreferencesKey("show_rpp_zone_labels")
+    val SHOW_METER_BADGES = booleanPreferencesKey("show_meter_badges")
     val TILE_CACHE_MAX_MB = intPreferencesKey("tile_cache_max_mb")
     // "DRIVING:<carId>:<epochMillis>" or "PARKED:<carId>:<epochMillis>" — a short-lived record
     // of the most recent Bluetooth connect/disconnect, read by loadWidgetSummary so the widget
@@ -86,7 +87,11 @@ object SettingsDefaults {
     const val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = 5
     const val SOON_THRESHOLD_DAYS = 3f
     const val IMMINENT_THRESHOLD_DAYS = 2f
-    const val REFRESH_INTERVAL_HOURS = 24
+    // 72h (3 days) — these datasets (street sweeping schedules) change rarely, so a daily
+    // background refresh was mostly wasted data usage; the Settings slider still goes down to
+    // 6h for anyone who wants a tighter interval, and this default doesn't affect a manual
+    // "Refresh Data Now" tap or anyone's already-saved preference.
+    const val REFRESH_INTERVAL_HOURS = 72
     const val DRIVING_MODE_ZOOM = 19f
     const val DRIVING_MODE_AUTO_CENTER = true
     const val DRIVING_MODE_AUTO_ZOOM = true // preserves prior always-zoom-on-driving-mode behavior
@@ -117,6 +122,10 @@ object SettingsDefaults {
     // so it's inherently rarer and more directly actionable than the countdown labels, which
     // show for every IMMINENT/ACTIVE sweep segment regardless of what's actually relevant to you.
     const val SHOW_RPP_ZONE_LABELS = true
+    // Defaults on, same reasoning as SHOW_RPP_ZONE_LABELS just above — a meter badge only ever
+    // appears while that meter is actually enforced right now, so it's inherently rarer and
+    // more directly actionable than showing every metered post regardless of hours.
+    const val SHOW_METER_BADGES = true
     const val TILE_CACHE_MAX_MB = 200
 }
 
@@ -451,6 +460,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setShowRppZoneLabels(value: Boolean) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.SHOW_RPP_ZONE_LABELS] = value }
+    }
+
+    val showMeterBadges: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.SHOW_METER_BADGES] ?: SettingsDefaults.SHOW_METER_BADGES
+    }
+
+    suspend fun setShowMeterBadges(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.SHOW_METER_BADGES] = value }
     }
 
     val tileCacheMaxMb: Flow<Int> = context.dataStore.data.map { prefs ->

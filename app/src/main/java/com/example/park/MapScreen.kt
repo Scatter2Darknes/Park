@@ -48,6 +48,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -61,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -200,6 +206,9 @@ fun MapScreen(
     var parkingFlowState by remember { mutableStateOf<ParkingFlowState>(ParkingFlowState.Hidden) }
     var activeParkedCars by remember { mutableStateOf<List<CarWithStatus>>(emptyList()) }
     var parkedBannerExpanded by remember { mutableStateOf(false) }
+    // Set from the priority banner's expanded row when a car with an active meter timer is
+    // tapped to extend it — see the "Did you add more time?" dialog near the banner.
+    var extendMeterTimerCar by remember { mutableStateOf<CarWithStatus?>(null) }
     // Keyed lookup for the Bluetooth connection chip — activeParkedCars only covers currently
     // parked cars, but a BT-connected car (i.e. currently being driven) is by definition not
     // parked, so its name/style has to come from the full car list instead.
@@ -300,6 +309,7 @@ fun MapScreen(
     var statusColors by remember { mutableStateOf(SweepStatusColors()) }
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
+    var showMeterBadges by remember { mutableStateOf(SettingsDefaults.SHOW_METER_BADGES) }
     // "CAUTIOUS" (default) keeps the original two-dialog confirm-then-pin flow; "SIMPLE"
     // collapses it into QuickParkConfirmDialog for someone who's decided they'd rather trade
     // that extra checkpoint for fewer taps. See ParkingNotificationsSection in SettingsScreen.
@@ -336,6 +346,7 @@ fun MapScreen(
         lastRefreshMillis = SettingsRepository(context).lastRefreshMillis.first()
         showImminentCountdown = SettingsRepository(context).showImminentCountdown.first()
         showRppZoneLabels = SettingsRepository(context).showRppZoneLabels.first()
+        showMeterBadges = SettingsRepository(context).showMeterBadges.first()
         tunnelAutoDimEnabled = SettingsRepository(context).tunnelAutoDimEnabled.first()
         parkingConfirmationStyle = SettingsRepository(context).parkingConfirmationStyle.first()
         // The map (below) isn't created until this flips true. Without this gate, the
@@ -474,6 +485,25 @@ fun MapScreen(
         toastMessage = null
     }
 
+    // Checks a safe-tagged Saved Location (LocationStyleDialog's toggle) before falling through
+    // to the normal segment-matching flow. Unlike Bluetooth auto-park (where "car disconnected
+    // near a safe spot" is already a strong signal, so it's fine to assume), a manual "I'm
+    // Parked" tap only proves the PHONE is near the safe location — not that the car is
+    // actually sitting in the garage rather than, say, legally parked on the street right in
+    // front of it. So a match here asks instead of assuming: ConfirmingSafeLocation. "Yes"
+    // saves silently via saveUnmanagedParkedState (still runs its own independent RPP check);
+    // "No" falls through to the normal proceedToMatching flow, matching the pre-safe-location
+    // "I'm Parked" behavior exactly. Every fresh-point call site below (startParkingFlow's two
+    // direct-match branches, and ChoosingCar's onPick/onAddNew once a car is chosen) routes
+    // through this instead of calling proceedToMatching directly.
+    suspend fun resolveParkingFlow(carId: Long, point: LatLng): ParkingFlowState {
+        val safeLocation = findSafeSavedLocation(context, point)
+        if (safeLocation != null) {
+            return ParkingFlowState.ConfirmingSafeLocation(carId, safeLocation, point)
+        }
+        return proceedToMatching(context, carId, point)
+    }
+
     // Shared by the GPS-based "I'm Parked" button and "Use saved location" — the only
     // difference between them is where the starting point comes from.
     fun startParkingFlow(point: LatLng) {
@@ -486,8 +516,8 @@ fun MapScreen(
             parkingFlowState = when {
                 allCars.isEmpty() -> ParkingFlowState.ChoosingCar(point)
                 alwaysAsk -> ParkingFlowState.ChoosingCar(point)
-                allCars.size == 1 -> proceedToMatching(context, allCars.first().id, point)
-                defaultCar != null -> proceedToMatching(context, defaultCar.id, point)
+                allCars.size == 1 -> resolveParkingFlow(allCars.first().id, point)
+                defaultCar != null -> resolveParkingFlow(defaultCar.id, point)
                 else -> ParkingFlowState.ChoosingCar(point) // multiple cars, none marked default — genuinely ambiguous
             }
         }
@@ -530,6 +560,33 @@ fun MapScreen(
             showSyncSuccess = true
         }
         previousIsFullySynced = isFullySynced
+    }
+
+    // Every other reload trigger on this screen is pan/zoom/GPS-movement-driven — nothing
+    // previously redrew the map when a sync itself finished, so freshly-synced segments, RPP
+    // zones, or meter badges (a manual "Refresh Data Now" already reports e.g. "+N metered
+    // zones" in its status message) wouldn't actually show up until the next one of those
+    // happened to fire. Same isSyncBusy TRUE->FALSE transition SettingsScreen already watches
+    // to re-read lastRefreshMillis, just triggering a redraw here instead.
+    var previousIsSyncBusy by remember { mutableStateOf(isSyncBusy) }
+    LaunchedEffect(isSyncBusy) {
+        if (!isSyncBusy && previousIsSyncBusy) {
+            mapViewRef?.let { mv ->
+                nearbySegmentCount = reloadSegmentsAndMarkers(
+                    mv, context, mv.mapCenter as GeoPoint,
+                    radiusDegrees = segmentRadiusDegrees,
+                    isPinDropActive = { pinDropCallback != null },
+                    thresholds = sweepThresholds,
+                    statusColors = statusColors,
+                    showCountdownLabels = showImminentCountdown,
+                    showRppZoneLabels = showRppZoneLabels,
+                    showMeterBadges = showMeterBadges,
+                    onSegmentClick = ::handleSegmentTap,
+                    locationOverlay = locationOverlayRef
+                )
+            }
+        }
+        previousIsSyncBusy = isSyncBusy
     }
 
     LaunchedEffect(Unit) {
@@ -682,6 +739,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlayRef
                             )
@@ -774,6 +832,7 @@ fun MapScreen(
                                         statusColors = statusColors,
                                         showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                         onSegmentClick = ::handleSegmentTap,
                                         locationOverlay = locationOverlayRef
                                     )
@@ -799,6 +858,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlay
                             )
@@ -1119,11 +1179,26 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
 
                                 val mostUrgentDeadline = mostUrgent.soonestDeadline()
-                                val countdownText = mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                // Only when there's truly no risk of any kind (no sweep segment
+                                // AND no deadline computed at all \u2014 see saveUnmanagedParkedState)
+                                // does this get the distinct "safe" treatment below. A real
+                                // segment whose schedule just failed to resolve also has a null
+                                // deadline but keeps the existing "?" \u2014 that's a data gap, not a
+                                // confirmed safe spot, and shouldn't be relabeled as one.
+                                val mostUrgentUnmanaged = mostUrgent.parkedState?.segmentBlockSweepId == null && mostUrgentDeadline == null
+                                val countdownText = when {
+                                    mostUrgentUnmanaged -> "No cleaning risk"
+                                    else -> mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                }
+                                val mostUrgentKindLabel = when (mostUrgentDeadline?.kind) {
+                                    DeadlineKind.RPP -> " \u00b7 RPP limit"
+                                    DeadlineKind.METER -> " \u00b7 Meter timer"
+                                    else -> ""
+                                }
                                 Text(
-                                    text = "${mostUrgent.car.name} \u2014 $countdownText" +
-                                            (if (mostUrgentDeadline?.kind == DeadlineKind.RPP) " \u00b7 RPP limit" else ""),
-                                    fontWeight = FontWeight.Bold
+                                    text = "${mostUrgent.car.name} \u2014 $countdownText$mostUrgentKindLabel",
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (mostUrgentUnmanaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
                                 )
 
                                 if (activeParkedCars.size > 1) {
@@ -1149,13 +1224,26 @@ fun MapScreen(
 
                                 activeParkedCars.forEach { item ->
                                     val itemDeadline = item.soonestDeadline()
-                                    val itemNextText = itemDeadline?.let {
-                                        val dt = java.time.Instant.ofEpochMilli(it.millis)
-                                            .atZone(SF_ZONE)
-                                        val base = formatSweepDateTime(dt)
-                                        if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
-                                    } ?: "No cleaning schedule found"
-                                    val itemCountdown = itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                    // Same distinction as the collapsed row above: only a car
+                                    // with no segment AND no deadline at all gets the "safe"
+                                    // wording/color; a real segment with an unresolvable
+                                    // schedule keeps the existing ambiguous fallback text.
+                                    val itemUnmanaged = item.parkedState?.segmentBlockSweepId == null && itemDeadline == null
+                                    val itemNextText = when {
+                                        itemUnmanaged -> "Not a street cleaning risk"
+                                        else -> itemDeadline?.let {
+                                            val dt = java.time.Instant.ofEpochMilli(it.millis)
+                                                .atZone(SF_ZONE)
+                                            val base = formatSweepDateTime(dt)
+                                            when (it.kind) {
+                                                DeadlineKind.RPP -> "RPP limit: $base"
+                                                DeadlineKind.METER -> "Meter timer: $base"
+                                                DeadlineKind.SWEEP -> base
+                                            }
+                                        } ?: "No cleaning schedule found"
+                                    }
+                                    val itemCountdown = if (itemUnmanaged) "—" else itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
+                                    val itemTextColor = if (itemUnmanaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
 
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1176,19 +1264,93 @@ fun MapScreen(
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
-                                            Text(itemNextText, style = MaterialTheme.typography.bodySmall)
+                                            Text(itemNextText, style = MaterialTheme.typography.bodySmall, color = itemTextColor)
                                         }
                                         Text(
                                             itemCountdown,
                                             fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.bodyMedium
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = itemTextColor
                                         )
+                                        // Only for an active meter timer specifically — checked
+                                        // directly against the stored field rather than
+                                        // itemDeadline.kind, since a car can have a meter timer
+                                        // running even when a sooner sweep/RPP deadline is what's
+                                        // actually shown as itemNextText/itemCountdown above.
+                                        if (item.parkedState?.meterTimerAtMillis != null) {
+                                            TextButton(onClick = {
+                                                extendMeterTimerCar = item
+                                                parkedBannerExpanded = false
+                                            }) { Text("+ time") }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
+                }
+
+                extendMeterTimerCar?.let { car ->
+                    var extraMinutesText by remember(car) { mutableStateOf("") }
+                    // true = add minutes onto the existing deadline (topped up the meter);
+                    // false = replace it with a fresh "N minutes from now" (re-typed a new
+                    // reading, or just wrong the first time).
+                    var addMode by remember(car) { mutableStateOf(true) }
+                    AlertDialog(
+                        onDismissRequest = { extendMeterTimerCar = null },
+                        title = { Text("Update meter timer for ${car.car.name}") },
+                        text = {
+                            Column {
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = addMode,
+                                        onClick = { addMode = true },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                                    ) { Text("Add minutes") }
+                                    SegmentedButton(
+                                        selected = !addMode,
+                                        onClick = { addMode = false },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                                    ) { Text("Set new time") }
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = extraMinutesText,
+                                    onValueChange = { extraMinutesText = it.filter(Char::isDigit) },
+                                    label = { Text(if (addMode) "Additional minutes" else "Minutes from now") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val minutes = extraMinutesText.toIntOrNull()
+                                if (minutes != null && minutes > 0) {
+                                    scope.launch {
+                                        val now = System.currentTimeMillis()
+                                        // addMode extends from whichever is later — the existing
+                                        // deadline, or now — so a timer that already lapsed
+                                        // before this got updated doesn't schedule the new one
+                                        // further in the past. Setting a new time always counts
+                                        // from now instead, ignoring whatever was there before.
+                                        val base = if (addMode) {
+                                            maxOf(car.parkedState?.meterTimerAtMillis ?: now, now)
+                                        } else {
+                                            now
+                                        }
+                                        scheduleMeterTimer(context, car.car.id, car.car.name, "the meter", base + minutes * 60_000L)
+                                        refreshActiveParkedCars()
+                                    }
+                                }
+                                extendMeterTimerCar = null
+                            }) { Text(if (addMode) "Add" else "Set") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { extendMeterTimerCar = null }) { Text("Cancel") }
+                        }
+                    )
                 }
 
                 // Sync-status pill comes next, right below the priority banner — a dedicated,
@@ -1365,6 +1527,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlayRef
                             )
@@ -1460,12 +1623,12 @@ fun MapScreen(
                 CarSelectionDialog(
                     cars = cars,
                     onPick = { car ->
-                        scope.launch { parkingFlowState = proceedToMatching(context, car.id, state.point) }
+                        scope.launch { parkingFlowState = resolveParkingFlow(car.id, state.point) }
                     },
                     onAddNew = { name ->
                         scope.launch {
                             val newId = AppDatabase.getInstance(context).carDao().insert(Car(name = name))
-                            parkingFlowState = proceedToMatching(context, newId, state.point)
+                            parkingFlowState = resolveParkingFlow(newId, state.point)
                         }
                     },
                     onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
@@ -1550,49 +1713,132 @@ fun MapScreen(
                     }
                 )
             }
-            is ParkingFlowState.AskingForPin -> AlertDialog(
-                onDismissRequest = { /* require an explicit choice */ },
-                title = { Text("Add an exact pin?") },
-                text = {
-                    Column {
-                        Text("${state.segment.corridor} will be highlighted either way.")
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = {
-                            scope.launch {
-                                saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
+            is ParkingFlowState.AskingForPin -> {
+                // Checked here (rather than gating the dialog's shape entirely) so the extra
+                // option only appears once a confident, currently-enforced MeteredZone match is
+                // actually known for this point — see findConfidentMeteredMatch.
+                var meterMatch by remember(state) { mutableStateOf<MeteredZone?>(null) }
+                LaunchedEffect(state) {
+                    meterMatch = findConfidentMeteredMatch(context, state.point)
+                }
+                AlertDialog(
+                    onDismissRequest = { /* require an explicit choice */ },
+                    title = { Text("Add an exact pin?") },
+                    text = {
+                        Column {
+                            Text("${state.segment.corridor} will be highlighted either way.")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(onClick = {
+                                scope.launch {
+                                    saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
+                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                    refreshActiveParkedCars()
+                                    parkingFlowState = ParkingFlowState.Hidden
+                                }
+                            }) { Text("Yes, pin my current location") }
+                            TextButton(onClick = {
+                                parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
+                            }) { Text("Drop pin manually on map") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    saveParkedState(context, state.carId, state.segment, state.point)
+                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                    refreshActiveParkedCars()
+                                    parkingFlowState = ParkingFlowState.Hidden
+                                }
+                            }) { Text("No, just highlight street") }
+                            meterMatch?.let { meter ->
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(onClick = {
+                                    parkingFlowState = ParkingFlowState.AskingForMeterTimer(state.carId, state.segment, state.point, meter)
+                                }) { Text("Set a meter timer?") }
                             }
-                        }) { Text("Yes, pin my current location") }
-                        TextButton(onClick = {
-                            parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
-                        }) { Text("Drop pin manually on map") }
-                        TextButton(onClick = {
-                            scope.launch {
-                                saveParkedState(context, state.carId, state.segment, state.point)
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
-                            }
-                        }) { Text("No, just highlight street") }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {}
+                )
+            }
+            is ParkingFlowState.AskingForMeterTimer -> {
+                var customMinutesText by remember(state) { mutableStateOf("") }
+
+                suspend fun finishWithMeterTimer(minutes: Int?) {
+                    saveParkedState(context, state.carId, state.segment, state.point, state.exactPin?.lat, state.exactPin?.lng)
+                    if (minutes != null && minutes > 0) {
+                        val carName = AppDatabase.getInstance(context).carDao().getAll()
+                            .firstOrNull { it.id == state.carId }?.name ?: "Your car"
+                        val meterLabel = state.meter.streetName?.let { "the meter on $it" } ?: "the meter"
+                        scheduleMeterTimer(context, state.carId, carName, meterLabel, System.currentTimeMillis() + minutes * 60_000L)
                     }
-                },
-                confirmButton = {},
-                dismissButton = {}
-            )
+                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                    refreshActiveParkedCars()
+                    parkingFlowState = ParkingFlowState.Hidden
+                }
+
+                AlertDialog(
+                    onDismissRequest = { /* require an explicit choice */ },
+                    title = { Text("Set a meter timer?") },
+                    text = {
+                        Column {
+                            Text(
+                                "Not tracking meter payment — just a reminder for whenever you plan to move by." +
+                                        (state.meter.timeLimitMinutes?.let { " Posted limit here: $it min." } ?: "")
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            state.meter.timeLimitMinutes?.let { limit ->
+                                TextButton(onClick = { scope.launch { finishWithMeterTimer(limit) } }) {
+                                    Text("In $limit min (posted limit)")
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = customMinutesText,
+                                    onValueChange = { customMinutesText = it.filter(Char::isDigit) },
+                                    label = { Text("Custom — minutes from now") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { scope.launch { finishWithMeterTimer(customMinutesText.toIntOrNull()) } }) {
+                                    Text("Set")
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { scope.launch { finishWithMeterTimer(null) } }) { Text("Skip — just park") }
+                    }
+                )
+            }
             is ParkingFlowState.DroppingPin -> {
                 LaunchedEffect(state) {
                     pinDropCallback = { tappedPoint ->
                         scope.launch {
-                            saveParkedState(
-                                context, state.carId, state.segment, state.originalPoint,
-                                tappedPoint.latitude, tappedPoint.longitude
-                            )
-                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                            refreshActiveParkedCars()
                             pinDropCallback = null
-                            parkingFlowState = ParkingFlowState.Hidden
+                            val droppedPoint = LatLng(tappedPoint.latitude, tappedPoint.longitude)
+                            // Re-checked against the DROPPED pin, not state.originalPoint —
+                            // this is exactly the case AskingForPin's own one-time meter check
+                            // (run against the original, possibly-imprecise GPS point before
+                            // this manual correction) can miss. Found: defer the actual save to
+                            // AskingForMeterTimer's own buttons (avoids saving twice); not
+                            // found: save immediately as before.
+                            val meter = findConfidentMeteredMatch(context, droppedPoint)
+                            if (meter != null) {
+                                parkingFlowState = ParkingFlowState.AskingForMeterTimer(
+                                    state.carId, state.segment, state.originalPoint, meter, exactPin = droppedPoint
+                                )
+                            } else {
+                                saveParkedState(
+                                    context, state.carId, state.segment, state.originalPoint,
+                                    tappedPoint.latitude, tappedPoint.longitude
+                                )
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
                         }
                     }
                 }
@@ -1610,6 +1856,59 @@ fun MapScreen(
                     parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
                 },
                 onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+            )
+            is ParkingFlowState.NoStreetNearby -> AlertDialog(
+                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                title = { Text("No nearby streets found") },
+                text = {
+                    Column {
+                        Text("We couldn't find any street-cleaning data near this spot — a garage, driveway or private lot, maybe?")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextButton(onClick = {
+                            scope.launch {
+                                saveUnmanagedParkedState(context, state.carId, state.point)
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
+                        }) { Text("Not a street cleaning risk spot") }
+                        TextButton(onClick = {
+                            // The matcher just missed a real nearby street — fall through to
+                            // the same "tap a street on the map" escape hatch PickingManually
+                            // already offers, rather than assuming this really is unmanaged.
+                            parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
+                        }) { Text("Select from map instead") }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { parkingFlowState = ParkingFlowState.Hidden }) { Text("Cancel") } }
+            )
+            is ParkingFlowState.ConfirmingSafeLocation -> AlertDialog(
+                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                title = { Text("Park at ${state.location.name}?") },
+                text = {
+                    Text(
+                        "Did you park at “${state.location.name}” and not on a street-cleaning " +
+                                "segment — like a garage or driveway?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        scope.launch {
+                            saveUnmanagedParkedState(context, state.carId, state.point, viaSafeLocationId = state.location.id)
+                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                            refreshActiveParkedCars()
+                            parkingFlowState = ParkingFlowState.Hidden
+                        }
+                    }) { Text("Yes") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        // Not actually in the garage — fall through to the ordinary flow exactly
+                        // as if this Saved Location had never matched at all.
+                        scope.launch { parkingFlowState = proceedToMatching(context, state.carId, state.point) }
+                    }) { Text("No, check the street") }
+                }
             )
             is ParkingFlowState.PickingViaMap -> {
                 MapInstructionBanner(text = "Tap a street on the map to select it")

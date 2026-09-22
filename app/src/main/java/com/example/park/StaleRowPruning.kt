@@ -121,3 +121,15 @@ suspend fun pruneStaleRppRegulations(context: Context, syncId: Long, existingCou
         info = { android.util.Log.d("RppSync", it) }
     )
 }
+
+/** Metered-zone counterpart of [pruneStaleStreetSegments]. [fetch] is the meter LOCATION fetch
+ *  specifically (see MeteredZoneRepository) — the reliable half this app's own reachability
+ *  determines completeness from, independent of whether the schedule half also succeeded. */
+suspend fun pruneStaleMeteredZones(context: Context, syncId: Long, existingCount: Int, fetch: FeedFetch) {
+    pruneIfSafe(
+        "meter", existingCount, fetch,
+        deleteUnseen = { AppDatabase.getInstance(context).meteredZoneDao().deleteNotSeenSince(syncId) },
+        warn = { android.util.Log.w("MeterSync", it) },
+        info = { android.util.Log.d("MeterSync", it) }
+    )
+}

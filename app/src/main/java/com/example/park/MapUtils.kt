@@ -23,6 +23,7 @@ class CarPinMarker(mapView: MapView) : Marker(mapView)
 class SavedLocationMarker(mapView: MapView) : Marker(mapView)
 class CountdownLabelMarker(mapView: MapView) : Marker(mapView)
 class RppZoneLabelMarker(mapView: MapView) : Marker(mapView)
+class MeterBadgeMarker(mapView: MapView) : Marker(mapView)
 
 // The tap-feedback halo drawn under whichever segment was just tapped — see
 // showTappedSegmentHighlight. A distinct class (rather than reusing Polyline directly) so
@@ -41,10 +42,27 @@ private const val MAX_COUNTDOWN_LABELS = 30
 // matters more here.
 private const val MAX_RPP_ZONE_LABELS = 40
 
+// Same idea, for meter badges.
+private const val MAX_METER_BADGES = 40
+
+// How close two badges' SCREEN positions (not geographic distance — this is what actually
+// governs visual overlap, and it's naturally zoom-aware: the same real-world spacing maps to
+// more screen pixels zoomed in, fewer zoomed out) can be before the later one is skipped
+// entirely rather than drawn on top of / crowding the earlier one. Approximate (badges are
+// pills of varying width, not all the same size, so this is a circular stand-in for what's
+// really an irregular bounding-box overlap check) but tuned to noticeably thin out a dense
+// block without being so aggressive it hides genuinely separate badges.
+private const val BADGE_SUPPRESSION_RADIUS_DP = 26f
+
 // A fixed violet, deliberately outside the SAFE/SOON/IMMINENT/ACTIVE palette (greens/yellows/
 // reds) and not user-configurable like those are — RPP status isn't a sweep-urgency signal, so
 // it shouldn't visually read as one.
 private val RPP_ZONE_LABEL_COLOR_INT = android.graphics.Color.parseColor("#8E24AA")
+
+// Distinct from both the sweep palette and the RPP violet above — metered is a third,
+// independent axis (a curb can be swept AND RPP-zoned AND metered all at once), so it needs
+// its own color rather than borrowing either.
+private val METER_BADGE_COLOR_INT = android.graphics.Color.parseColor("#00838F")
 
 // Keyed by a prefix ("car|"/"loc|") plus colorHex|icon|photoPath — styling rarely changes,
 // so repeated overlay refreshes (every debounced pan) reuse the same Bitmap instead of
@@ -609,15 +627,19 @@ fun clearTappedSegmentHighlight(mapView: MapView) {
  * [text] in bold white on top. Sized to fit the text tightly rather than a fixed size, since
  * the text is deliberately short ("45m", "2h", "2d") — see formatShortCountdown.
  */
-private fun buildCountdownLabelIcon(context: Context, text: String, backgroundColorInt: Int): android.graphics.drawable.Drawable {
+// [compact] shrinks the text/padding a notch — used for the RPP zone label so it takes less
+// room than the sweep countdown labels while still showing its zone+time text (unlike the
+// meter badge, which drops text/buildCountdownLabelIcon entirely in favor of a small icon —
+// see buildMeterBadgeIcon — since there can be many more meters than RPP blocks in one view).
+private fun buildCountdownLabelIcon(context: Context, text: String, backgroundColorInt: Int, compact: Boolean = false): android.graphics.drawable.Drawable {
     val density = context.resources.displayMetrics.density
     val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
-        textSize = 11f * density
+        textSize = (if (compact) 9f else 11f) * density
         textAlign = android.graphics.Paint.Align.CENTER
         isFakeBoldText = true
     }
-    val paddingPx = 5f * density
+    val paddingPx = (if (compact) 3f else 5f) * density
     val textWidth = textPaint.measureText(text)
     val textHeight = textPaint.descent() - textPaint.ascent()
     val width = (textWidth + paddingPx * 2).toInt().coerceAtLeast(1)
@@ -638,6 +660,40 @@ private fun buildCountdownLabelIcon(context: Context, text: String, backgroundCo
 
     val textY = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
     canvas.drawText(text, width / 2f, textY, textPaint)
+
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+}
+
+/**
+ * A small filled circle with a "P" — deliberately just an icon, no text, unlike
+ * buildCountdownLabelIcon's pill: meters are spaced every ~20ft along a block, so a real block
+ * can have a dozen-plus badges in view at once, and a full "$ Metered" pill per one was
+ * cluttering the map. No per-meter time/limit text either (unlike the RPP zone label, which
+ * keeps its zone+countdown) — a glance at the map badge only needs to answer "is this block
+ * metered," not each individual post's exact numbers; the timer/limit detail already lives in
+ * the AskingForPin/AskingForMeterTimer flow once you've actually picked a spot.
+ */
+private fun buildMeterBadgeIcon(context: Context, colorInt: Int): android.graphics.drawable.Drawable {
+    val density = context.resources.displayMetrics.density
+    val diameterPx = (16f * density).toInt().coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(diameterPx, diameterPx, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val center = diameterPx / 2f
+
+    val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(center, center, center, bgPaint)
+
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 10f * density
+        textAlign = android.graphics.Paint.Align.CENTER
+        isFakeBoldText = true
+    }
+    val textY = center - (textPaint.descent() + textPaint.ascent()) / 2f
+    canvas.drawText("P", center, textY, textPaint)
 
     return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
 }
@@ -671,6 +727,7 @@ suspend fun loadAndDrawSegments(
     statusColors: SweepStatusColors = SweepStatusColors(),
     showCountdownLabels: Boolean = false,
     showRppZoneLabels: Boolean = true,
+    showMeterBadges: Boolean = true,
     onSegmentClick: (StreetSegment) -> Unit = {}
 ): Int {
     val db = AppDatabase.getInstance(context)
@@ -695,6 +752,20 @@ suspend fun loadAndDrawSegments(
     mapView.overlays.removeAll { it is Polyline && it !is ParkedHighlightPolyline && it !is TappedSegmentHaloPolyline }
     mapView.overlays.removeAll { it is CountdownLabelMarker }
     mapView.overlays.removeAll { it is RppZoneLabelMarker }
+    mapView.overlays.removeAll { it is MeterBadgeMarker }
+
+    // Skips the query entirely when disabled in Settings, not just the drawing — no point
+    // fetching rows that'll never be shown.
+    val nearbyMeters = if (showMeterBadges) {
+        db.meteredZoneDao().getNearby(
+            minLat = centerPoint.latitude - radiusDegrees,
+            maxLat = centerPoint.latitude + radiusDegrees,
+            minLng = centerPoint.longitude - radiusDegrees,
+            maxLng = centerPoint.longitude + radiusDegrees
+        )
+    } else {
+        emptyList()
+    }
 
     // Skips the query entirely when disabled in Settings, not just the drawing — no point
     // fetching rows that'll never be shown.
@@ -786,6 +857,28 @@ suspend fun loadAndDrawSegments(
         mapView.overlays.add(visibleLine)
     }
 
+    // Shared across all three badge kinds below (countdown, RPP zone, meter) so they never
+    // visually stack on top of each other — checked and updated in priority order (countdown
+    // first, then RPP, then meter: most safety-critical/least numerous wins a collision), and
+    // also naturally thins out same-kind density (e.g. several meters on one block), since a
+    // later same-type candidate checks against earlier ones from its own loop too. See
+    // BADGE_SUPPRESSION_RADIUS_DP's doc comment for why this is screen-space, not geographic.
+    val placedBadgeScreenPoints = mutableListOf<android.graphics.Point>()
+    val badgeSuppressionRadiusPx = BADGE_SUPPRESSION_RADIUS_DP * context.resources.displayMetrics.density
+    // Returns true (and reserves the spot) if [geoPoint] isn't too close to any badge already
+    // placed this draw pass; false (and draws nothing) if it is.
+    fun tryPlaceBadge(geoPoint: GeoPoint): Boolean {
+        val screenPoint = mapView.projection.toPixels(geoPoint, null)
+        val tooClose = placedBadgeScreenPoints.any { existing ->
+            val dx = (existing.x - screenPoint.x).toDouble()
+            val dy = (existing.y - screenPoint.y).toDouble()
+            sqrt(dx * dx + dy * dy) < badgeSuppressionRadiusPx
+        }
+        if (tooClose) return false
+        placedBadgeScreenPoints.add(screenPoint)
+        return true
+    }
+
     if (showCountdownLabels) {
         val centerLatLng = LatLng(centerPoint.latitude, centerPoint.longitude)
 
@@ -809,9 +902,10 @@ suspend fun loadAndDrawSegments(
                         ?.let { java.time.Duration.between(now, it).toMillis() }
                     else -> null
                 }
-                if (countdownMillis != null) {
+                val geoPoint = GeoPoint(midpoint.lat, midpoint.lng)
+                if (countdownMillis != null && tryPlaceBadge(geoPoint)) {
                     val label = CountdownLabelMarker(mapView).apply {
-                        position = GeoPoint(midpoint.lat, midpoint.lng)
+                        position = geoPoint
                         icon = buildCountdownLabelIcon(
                             context,
                             formatShortCountdown(countdownMillis),
@@ -847,17 +941,50 @@ suspend fun loadAndDrawSegments(
             .take(MAX_RPP_ZONE_LABELS)
             .forEach { (triple, _) ->
                 val (regulation, midpoint, remainingMillis) = triple
+                val geoPoint = GeoPoint(midpoint.lat, midpoint.lng)
+                if (!tryPlaceBadge(geoPoint)) return@forEach
                 val label = RppZoneLabelMarker(mapView).apply {
-                    position = GeoPoint(midpoint.lat, midpoint.lng)
+                    position = geoPoint
+                    // Compact, and without the redundant "RPP" word — the violet color already
+                    // reads as "this is the permit indicator" once meters have their own,
+                    // entirely different (icon-only) badge style, so it doesn't need spelling
+                    // out too. Still shows the zone letter(s) and remaining time.
                     icon = buildCountdownLabelIcon(
                         context,
-                        "RPP ${regulation.zoneLetterSet().sorted().joinToString("/")} ${formatShortCountdown(remainingMillis)}",
-                        RPP_ZONE_LABEL_COLOR_INT
+                        "${regulation.zoneLetterSet().sorted().joinToString("/")} · ${formatShortCountdown(remainingMillis)}",
+                        RPP_ZONE_LABEL_COLOR_INT,
+                        compact = true
                     )
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setOnMarkerClickListener { _, _ -> false } // purely visual, same as the countdown labels
                 }
                 mapView.overlays.add(label)
+            }
+    }
+
+    // Meter badges — independent of sweep/RPP status entirely: a curb can be swept AND
+    // RPP-zoned AND metered all at once (three separate axes, not a replacement status), so
+    // this layers on top rather than competing with the polyline color. Only shown for a
+    // confident, currently-enforced match (or one with unknown hours — see
+    // isMeterEnforcedOrUnknown), same reasoning as the RPP zone labels: a badge that never
+    // disappeared outside enforced hours would misrepresent a spot that's genuinely free right now.
+    run {
+        val centerLatLng = LatLng(centerPoint.latitude, centerPoint.longitude)
+        nearbyMeters
+            .filter { isMeterEnforcedOrUnknown(it, now) }
+            .map { zone -> zone to distanceMetersBetween(centerLatLng, LatLng(zone.lat, zone.lng)) }
+            .sortedBy { (_, distance) -> distance }
+            .take(MAX_METER_BADGES)
+            .forEach { (zone, _) ->
+                val geoPoint = GeoPoint(zone.lat, zone.lng)
+                if (!tryPlaceBadge(geoPoint)) return@forEach
+                val badge = MeterBadgeMarker(mapView).apply {
+                    position = geoPoint
+                    icon = buildMeterBadgeIcon(context, METER_BADGE_COLOR_INT)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setOnMarkerClickListener { _, _ -> false } // purely visual, same as the other labels
+                }
+                mapView.overlays.add(badge)
             }
     }
 
@@ -898,12 +1025,13 @@ suspend fun reloadSegmentsAndMarkers(
     statusColors: SweepStatusColors = SweepStatusColors(),
     showCountdownLabels: Boolean = false,
     showRppZoneLabels: Boolean = true,
+    showMeterBadges: Boolean = true,
     onSegmentClick: (StreetSegment) -> Unit = {},
     locationOverlay: MyLocationNewOverlay? = null
 ): Int {
     val nearbyCount = loadAndDrawSegments(
         mapView, context, centerPoint,
-        radiusDegrees, isPinDropActive, thresholds, statusColors, showCountdownLabels, showRppZoneLabels, onSegmentClick
+        radiusDegrees, isPinDropActive, thresholds, statusColors, showCountdownLabels, showRppZoneLabels, showMeterBadges, onSegmentClick
     )
     refreshParkedCarOverlays(mapView, context)
     refreshSavedLocationOverlays(mapView, context)
@@ -916,7 +1044,10 @@ suspend fun reloadSegmentsAndMarkers(
     return nearbyCount
 }
 
-private fun distanceMetersBetween(a: LatLng, b: LatLng): Double {
+// Not private: reused by ParkingMatcher's findSafeSavedLocation (matching against a saved
+// location's single lat/lng) and MeteredZoneMatcher (matching a meter point feature against a
+// parked point) — both need this same flat-projection point-to-point distance.
+fun distanceMetersBetween(a: LatLng, b: LatLng): Double {
     val avgLatRad = Math.toRadians((a.lat + b.lat) / 2)
     val latScale = 111320.0
     val lngScale = 111320.0 * cos(avgLatRad)
