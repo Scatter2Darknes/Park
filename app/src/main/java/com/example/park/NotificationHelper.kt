@@ -137,6 +137,7 @@ object NotificationHelper {
         if (isUrgent) {
             val dismissIntent = Intent(context, DismissReminderReceiver::class.java).apply {
                 putExtra("notificationId", notificationId)
+                putExtra("carId", carId)
             }
             val dismissPendingIntent = PendingIntent.getBroadcast(
                 context,

@@ -225,7 +225,9 @@ sealed class AutoParkResult {
 private const val LOCATION_FRESHNESS_WINDOW_MILLIS = 2 * 60_000L
 private const val FRESH_FIX_TIMEOUT_MILLIS = 8_000L
 
-private suspend fun getFreshOrLastKnownLocation(context: Context): Location? {
+// Not private: DismissReminderReceiver's SILENT_AUTO_REPARK "I moved my car" behavior reuses
+// this exact same cache-then-fresh-fix lookup rather than duplicating it.
+suspend fun getFreshOrLastKnownLocation(context: Context): Location? {
     val locationManager = context.getSystemService(LocationManager::class.java)
 
     val cached = try {
@@ -306,7 +308,18 @@ private suspend fun requestSingleLocationFix(context: Context, locationManager: 
         }
     }
 
-suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
+/**
+ * @param postNoMatchNotification When false, a NO_MATCH result skips posting the "Did X just
+ *   park?" notification and just returns [AutoParkResult.NeedsConfirmation] — used by
+ *   DismissReminderReceiver's SILENT_AUTO_REPARK behavior, which wants to open the confirm
+ *   dialog directly on NO_MATCH instead of leaving a notification as the only way in. The
+ *   CONFIDENT and AMBIGUOUS branches are unaffected: they always save and always notify.
+ */
+suspend fun performAutoDetectPark(
+    context: Context,
+    car: Car,
+    postNoMatchNotification: Boolean = true
+): AutoParkResult {
     Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "performAutoDetectPark: car=${car.name} (id=${car.id})")
 
     val location = getFreshOrLastKnownLocation(context)
@@ -365,7 +378,10 @@ suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
             } else {
                 AutoParkResult.NeedsConfirmation(car.id, point)
             }
-            showAutoDetectNotification(
+            // See postNoMatchNotification's doc comment: SILENT_AUTO_REPARK's caller handles a
+            // NO_MATCH result itself (opens the confirm dialog directly) instead of wanting this
+            // notification too. The AMBIGUOUS branch always notifies regardless of the flag.
+            if (confidence == MatchConfidence.AMBIGUOUS || postNoMatchNotification) showAutoDetectNotification(
                 context = context,
                 car = car,
                 title = "Did ${car.name} just park?",

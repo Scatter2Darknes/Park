@@ -14,12 +14,27 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore by preferencesDataStore(name = "settings")
 
+/**
+ * What tapping the urgent reminder's "I moved my car" action button does — see
+ * DismissReminderReceiver.kt for where each is implemented.
+ *  - CLEAR_AND_OPEN_MAP (default): clears the car's parked state and cancels its reminders,
+ *    then opens the map with no forced dialog. Preserves the app's original behavior, just
+ *    fixed so it actually clears ParkedState instead of only cancelling the notification.
+ *  - SILENT_AUTO_REPARK: re-runs the same GPS-based segment matching Bluetooth auto-detect
+ *    uses. A confident or ambiguous match saves automatically; no match at all falls back to
+ *    FORCE_PARKING_DIALOG's behavior instead of silently doing nothing.
+ *  - FORCE_PARKING_DIALOG: clears the old state and opens straight into the "I'm Parked"
+ *    confirm flow with the current GPS point pre-filled.
+ */
+enum class MovedCarAction { CLEAR_AND_OPEN_MAP, SILENT_AUTO_REPARK, FORCE_PARKING_DIALOG }
+
 object SettingsKeys {
     val ALWAYS_ASK_CAR = booleanPreferencesKey("always_ask_car")
     val PARKING_CONFIRMATION_STYLE = stringPreferencesKey("parking_confirmation_style") // "CAUTIOUS" | "SIMPLE"
     val NOTIFICATION_OFFSET_MINUTES = intPreferencesKey("notification_offset_minutes")
     val URGENT_REMINDER_ENABLED = booleanPreferencesKey("urgent_reminder_enabled")
     val URGENT_OFFSET_MINUTES = intPreferencesKey("urgent_offset_minutes")
+    val MOVED_CAR_ACTION = stringPreferencesKey("moved_car_action") // MovedCarAction enum name
     val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = intPreferencesKey("informational_notification_timeout_minutes") // 0 = never
     val SOON_THRESHOLD_DAYS = floatPreferencesKey("soon_threshold_days")
     val IMMINENT_THRESHOLD_DAYS = floatPreferencesKey("imminent_threshold_days")
@@ -67,6 +82,7 @@ object SettingsDefaults {
     const val NOTIFICATION_OFFSET_MINUTES = 120 // 2h — matches the old hardcoded offset
     const val URGENT_REMINDER_ENABLED = true
     const val URGENT_OFFSET_MINUTES = 15
+    val MOVED_CAR_ACTION = MovedCarAction.CLEAR_AND_OPEN_MAP
     const val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = 5
     const val SOON_THRESHOLD_DAYS = 3f
     const val IMMINENT_THRESHOLD_DAYS = 2f
@@ -208,6 +224,17 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setUrgentOffsetMinutes(value: Int) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.URGENT_OFFSET_MINUTES] = value }
+    }
+
+    val movedCarAction: Flow<MovedCarAction> = context.dataStore.data.map { prefs ->
+        val raw = prefs[SettingsKeys.MOVED_CAR_ACTION]
+        // valueOf throws on an unrecognized/corrupt stored string rather than returning null,
+        // so an old or malformed value falls back to the default instead of crashing Settings.
+        raw?.let { runCatching { MovedCarAction.valueOf(it) }.getOrNull() } ?: SettingsDefaults.MOVED_CAR_ACTION
+    }
+
+    suspend fun setMovedCarAction(value: MovedCarAction) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.MOVED_CAR_ACTION] = value.name }
     }
 
     val informationalNotificationTimeoutMinutes: Flow<Int> = context.dataStore.data.map { prefs ->
