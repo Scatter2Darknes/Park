@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class, MeteredZone::class],
-    version = 18,
+    version = 19,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -63,6 +63,13 @@ suspend fun saveParkedState(
     val db = AppDatabase.getInstance(context)
     val parkedAtMillis = System.currentTimeMillis()
     val parkedAt = java.time.Instant.ofEpochMilli(parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
+    // A meter timer belongs to the specific spot it was set at, not the car in general — stale
+    // the instant the car re-parks anywhere, same as the Bluetooth "Did X just park?" prompt
+    // cancelled further down. Cancelled unconditionally (not just when nextMillis == null like
+    // cancelSweepReminder below) since this has nothing to do with sweep data; a caller that's
+    // about to set a NEW meter timer for this fresh row (see finishWithMeterTimer in
+    // MapScreen.kt) does so afterward, so this can't clobber it.
+    cancelMeterTimer(context, carId)
     // The whole CURB's schedule, not just the matched row's: a curb is often described by several rows (one per
     // sweep weekday / week pattern), and parking on one must cover them all — see CurbSchedule.
     val curbRows = loadCurbRows(context, segment)
@@ -245,6 +252,9 @@ suspend fun saveUnmanagedParkedState(
     val db = AppDatabase.getInstance(context)
     val parkedAtMillis = System.currentTimeMillis()
     val parkedAt = java.time.Instant.ofEpochMilli(parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
+    // See saveParkedState's identical call for why this is unconditional and safe to run
+    // before a caller sets a fresh meter timer for this same row.
+    cancelMeterTimer(context, carId)
 
     val rppRegulation = findConfidentRppMatch(context, point)
     android.util.Log.d(

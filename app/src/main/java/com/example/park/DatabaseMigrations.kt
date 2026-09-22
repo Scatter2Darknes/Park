@@ -212,10 +212,21 @@ val MIGRATION_17_18 = Migration(17, 18) { db ->
     )
 }
 
+/**
+ * v18 -> v19: adds meterTimerAtMillis to parked_state — the deadline of a currently-scheduled
+ * manual meter timer (see MeterTimer.kt), persisted so the map's priority banner and the
+ * widget can show it alongside the sweep/RPP deadline (see soonestDeadline() in
+ * CarActions.kt). Nullable INTEGER with no default, same reasoning as every other additive
+ * column here.
+ */
+val MIGRATION_18_19 = Migration(18, 19) { db ->
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN meterTimerAtMillis INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-    MIGRATION_17_18
+    MIGRATION_17_18, MIGRATION_18_19
 )
 
 /*

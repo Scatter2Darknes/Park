@@ -10,6 +10,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * A manual meter timer: the user types the specific time they want to be reminded (their own
@@ -19,7 +22,10 @@ import androidx.core.content.ContextCompat
  * that machinery (delivery markers, roll-forward, re-arm) applies here.
  */
 
-fun scheduleMeterTimer(context: Context, carId: Long, carName: String, meterLabel: String, triggerAtMillis: Long) {
+/** Schedules (or reschedules, e.g. "Did you add more time?") the alarm AND persists
+ *  [triggerAtMillis] on the car's ParkedState row, so the map's priority banner and the widget
+ *  can show it via soonestDeadline() (CarActions.kt) alongside the sweep/RPP deadline. */
+suspend fun scheduleMeterTimer(context: Context, carId: Long, carName: String, meterLabel: String, triggerAtMillis: Long) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val intent = Intent(context, MeterTimerReceiver::class.java).apply {
         putExtra("carId", carId)
@@ -31,11 +37,15 @@ fun scheduleMeterTimer(context: Context, carId: Long, carName: String, meterLabe
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
     setAlarm(alarmManager, canScheduleExactAlarmsCompat(context), triggerAtMillis, pendingIntent, "meter timer")
+    AppDatabase.getInstance(context).parkedStateDao().updateMeterTimer(carId, triggerAtMillis)
+    enqueueWidgetRefresh(context)
 }
 
 /** Cancels a pending meter timer alarm and any notification already posted for it — called
  *  from cancelParkingReminder, the same "this car is no longer parked here" call point every
- *  other reminder kind already uses. */
+ *  other reminder kind already uses. Doesn't touch the DB: cancelParkingReminder only ever
+ *  runs right before/around a ParkedState row being replaced or deleted entirely, which
+ *  already clears meterTimerAtMillis as part of that row's normal lifecycle. */
 fun cancelMeterTimer(context: Context, carId: Long) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val intent = Intent(context, MeterTimerReceiver::class.java)
@@ -59,6 +69,26 @@ class MeterTimerReceiver : BroadcastReceiver() {
         }
         Log.d("Park", "MeterTimerReceiver: firing for car $carId ($carName)")
         showMeterTimerNotification(context, carId, carName, meterLabel)
+
+        // Clears the persisted deadline so the priority banner/widget stop showing a countdown
+        // for a timer that already fired (it would otherwise sit there reading more and more
+        // negative). Guarded by parkedAtMillis so a delivery racing a re-park can't clear the
+        // NEW row's own (unrelated) meter timer.
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = AppDatabase.getInstance(context)
+                val parked = db.parkedStateDao().getForCar(carId)
+                if (parked?.meterTimerAtMillis != null) {
+                    db.parkedStateDao().updateMeterTimer(carId, null)
+                    enqueueWidgetRefresh(context)
+                }
+            } catch (e: Exception) {
+                Log.w("Park", "MeterTimerReceiver: failed to clear meterTimerAtMillis for car $carId", e)
+            } finally {
+                pendingResult.finish()
+            }
+        }
     }
 }
 

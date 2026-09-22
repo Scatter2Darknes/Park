@@ -48,6 +48,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -201,6 +203,9 @@ fun MapScreen(
     var parkingFlowState by remember { mutableStateOf<ParkingFlowState>(ParkingFlowState.Hidden) }
     var activeParkedCars by remember { mutableStateOf<List<CarWithStatus>>(emptyList()) }
     var parkedBannerExpanded by remember { mutableStateOf(false) }
+    // Set from the priority banner's expanded row when a car with an active meter timer is
+    // tapped to extend it — see the "Did you add more time?" dialog near the banner.
+    var extendMeterTimerCar by remember { mutableStateOf<CarWithStatus?>(null) }
     // Keyed lookup for the Bluetooth connection chip — activeParkedCars only covers currently
     // parked cars, but a BT-connected car (i.e. currently being driven) is by definition not
     // parked, so its name/style has to come from the full car list instead.
@@ -1155,9 +1160,13 @@ fun MapScreen(
                                     mostUrgentUnmanaged -> "No cleaning risk"
                                     else -> mostUrgentDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
                                 }
+                                val mostUrgentKindLabel = when (mostUrgentDeadline?.kind) {
+                                    DeadlineKind.RPP -> " \u00b7 RPP limit"
+                                    DeadlineKind.METER -> " \u00b7 Meter timer"
+                                    else -> ""
+                                }
                                 Text(
-                                    text = "${mostUrgent.car.name} \u2014 $countdownText" +
-                                            (if (mostUrgentDeadline?.kind == DeadlineKind.RPP) " \u00b7 RPP limit" else ""),
+                                    text = "${mostUrgent.car.name} \u2014 $countdownText$mostUrgentKindLabel",
                                     fontWeight = FontWeight.Bold,
                                     color = if (mostUrgentUnmanaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
                                 )
@@ -1196,7 +1205,11 @@ fun MapScreen(
                                             val dt = java.time.Instant.ofEpochMilli(it.millis)
                                                 .atZone(SF_ZONE)
                                             val base = formatSweepDateTime(dt)
-                                            if (it.kind == DeadlineKind.RPP) "RPP limit: $base" else base
+                                            when (it.kind) {
+                                                DeadlineKind.RPP -> "RPP limit: $base"
+                                                DeadlineKind.METER -> "Meter timer: $base"
+                                                DeadlineKind.SWEEP -> base
+                                            }
                                         } ?: "No cleaning schedule found"
                                     }
                                     val itemCountdown = if (itemUnmanaged) "—" else itemDeadline?.let { formatCountdown(it.millis - now) } ?: "?"
@@ -1229,12 +1242,67 @@ fun MapScreen(
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = itemTextColor
                                         )
+                                        // Only for an active meter timer specifically — checked
+                                        // directly against the stored field rather than
+                                        // itemDeadline.kind, since a car can have a meter timer
+                                        // running even when a sooner sweep/RPP deadline is what's
+                                        // actually shown as itemNextText/itemCountdown above.
+                                        if (item.parkedState?.meterTimerAtMillis != null) {
+                                            TextButton(onClick = {
+                                                extendMeterTimerCar = item
+                                                parkedBannerExpanded = false
+                                            }) { Text("+ time") }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
+                }
+
+                extendMeterTimerCar?.let { car ->
+                    var extraMinutesText by remember(car) { mutableStateOf("") }
+                    AlertDialog(
+                        onDismissRequest = { extendMeterTimerCar = null },
+                        title = { Text("Did you add more time?") },
+                        text = {
+                            Column {
+                                Text("Added minutes at the meter for ${car.car.name}?")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = extraMinutesText,
+                                    onValueChange = { extraMinutesText = it.filter(Char::isDigit) },
+                                    label = { Text("Additional minutes") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val extraMinutes = extraMinutesText.toIntOrNull()
+                                if (extraMinutes != null && extraMinutes > 0) {
+                                    scope.launch {
+                                        // Extends from whichever is later — the existing deadline,
+                                        // or now — so a timer that already lapsed before this got
+                                        // updated doesn't schedule the new one further in the past.
+                                        val base = maxOf(
+                                            car.parkedState?.meterTimerAtMillis ?: System.currentTimeMillis(),
+                                            System.currentTimeMillis()
+                                        )
+                                        val carName = car.car.name
+                                        scheduleMeterTimer(context, car.car.id, carName, "the meter", base + extraMinutes * 60_000L)
+                                        refreshActiveParkedCars()
+                                    }
+                                }
+                                extendMeterTimerCar = null
+                            }) { Text("Add") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { extendMeterTimerCar = null }) { Text("Cancel") }
+                        }
+                    )
                 }
 
                 // Sync-status pill comes next, right below the priority banner — a dedicated,
@@ -1682,6 +1750,7 @@ fun MapScreen(
                                     onValueChange = { customMinutesText = it.filter(Char::isDigit) },
                                     label = { Text("Custom — minutes from now") },
                                     singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     modifier = Modifier.weight(1f)
                                 )
                                 TextButton(onClick = { scope.launch { finishWithMeterTimer(customMinutesText.toIntOrNull()) } }) {
