@@ -247,7 +247,18 @@ object StreetDataSyncCenter {
                     android.util.Log.e("RppSync", "Manual RPP refresh failed", e)
                     ""
                 }
-                _statusMessage.value = "Synced ${"%,d".format(count)} segments.$rppStatusSuffix"
+                // Same reasoning as RPP above — meter badges are a secondary layer, and
+                // MeteredZoneRepository already degrades to location-only zones on its own
+                // (see its doc comment) rather than throwing for the expected data.sf.gov
+                // cert-chain risk, so this catch is only for a genuinely unexpected failure.
+                val meterStatusSuffix = try {
+                    val meterCount = MeteredZoneRepository(context).refreshFromNetwork()
+                    " (+${"%,d".format(meterCount)} metered zones)"
+                } catch (e: Exception) {
+                    android.util.Log.e("MeterSync", "Manual meter refresh failed", e)
+                    ""
+                }
+                _statusMessage.value = "Synced ${"%,d".format(count)} segments.$rppStatusSuffix$meterStatusSuffix"
             } catch (e: Exception) {
                 // Previously uncaught in the old Settings-only button, which crashed the app
                 // on any failure (a bad connection, DataSF throttling, a malformed row) — the

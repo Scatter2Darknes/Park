@@ -184,9 +184,38 @@ val MIGRATION_16_17 = Migration(16, 17) { db ->
     db.execSQL("ALTER TABLE parked_state ADD COLUMN parkedViaSafeLocationId INTEGER")
 }
 
+/**
+ * v17 -> v18: adds metered_zone (SFMTA meter locations joined with DataSF's meter operating
+ * schedules — see MeteredZone.kt and MeteredZoneApi.kt). Brand-new table, nothing to migrate
+ * data-wise. Numbered 17->18 (not 15->16) because this branch was rebased onto the
+ * saved-location-safe-flag branch's tip after the two independently reached "v16" on their own
+ * — two feature branches bumping the schema from the same base collide the instant both builds
+ * land on one device/app data, so from here on this needs to stack on whichever branch is
+ * ahead rather than assuming main's version number.
+ */
+val MIGRATION_17_18 = Migration(17, 18) { db ->
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS metered_zone (
+            id TEXT NOT NULL PRIMARY KEY,
+            postId TEXT NOT NULL,
+            lat REAL NOT NULL,
+            lng REAL NOT NULL,
+            streetName TEXT,
+            days TEXT,
+            hrsBegin INTEGER,
+            hrsEnd INTEGER,
+            timeLimitMinutes INTEGER,
+            lastSeenSyncId INTEGER
+        )
+        """.trimIndent()
+    )
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
+    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
+    MIGRATION_17_18
 )
 
 /*

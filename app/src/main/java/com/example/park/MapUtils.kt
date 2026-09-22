@@ -916,8 +916,9 @@ suspend fun reloadSegmentsAndMarkers(
     return nearbyCount
 }
 
-// Not private: ParkingMatcher's findSafeSavedLocation reuses this same flat-projection
-// point-to-point distance for matching against a saved location's single lat/lng.
+// Not private: reused by ParkingMatcher's findSafeSavedLocation (matching against a saved
+// location's single lat/lng) and MeteredZoneMatcher (matching a meter point feature against a
+// parked point) — both need this same flat-projection point-to-point distance.
 fun distanceMetersBetween(a: LatLng, b: LatLng): Double {
     val avgLatRad = Math.toRadians((a.lat + b.lat) / 2)
     val latScale = 111320.0
