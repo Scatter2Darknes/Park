@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)

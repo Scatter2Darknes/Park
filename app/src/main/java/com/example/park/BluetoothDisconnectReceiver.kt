@@ -316,6 +316,29 @@ suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
     }
 
     val point = LatLng(location.latitude, location.longitude)
+
+    // Checked before any segment/RPP matching — a safe-tagged Saved Location (explicitly
+    // marked in Settings, never inferred) means this disconnect is at a known garage/driveway,
+    // so there's nothing to classify. This is what makes that case fully hands-off: no
+    // ambiguous/no-match prompt ever appears for a spot the app already knows about.
+    val safeLocation = findSafeSavedLocation(context, point)
+    if (safeLocation != null) {
+        saveUnmanagedParkedState(context, car.id, point)
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        showAutoDetectNotification(
+            context = context,
+            car = car,
+            title = "Parked ${car.name} automatically",
+            text = "Detected at ${safeLocation.name}. Tap to view or correct.",
+            centerPoint = point,
+            suppressIfMapVisible = true,
+            informational = true,
+            timeoutAfterMillis = SettingsRepository(context).informationalNotificationTimeoutMillis()
+        )
+        Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "performAutoDetectPark: matched safe location '${safeLocation.name}', saved as unmanaged")
+        return AutoParkResult.Subscribed(safeLocation.name)
+    }
+
     val matches = findNearbySegmentMatches(context, point)
     val confidence = classifyMatch(matches)
     Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "performAutoDetectPark: ${matches.size} nearby matches, confidence=$confidence")

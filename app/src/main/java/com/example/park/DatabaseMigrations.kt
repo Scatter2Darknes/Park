@@ -158,9 +158,22 @@ val MIGRATION_14_15 = Migration(14, 15) { db ->
     db.execSQL("CREATE INDEX IF NOT EXISTS `index_street_segment_cnn_cnnRightLeft` ON `street_segment` (`cnn`, `cnnRightLeft`)")
 }
 
+/**
+ * v15 -> v16: adds isSafeFromSweeping to saved_location — a location explicitly marked (never
+ * inferred) as having no street-cleaning risk, e.g. a garage or driveway (see
+ * saveUnmanagedParkedState and the safe parking flow it's shared with). Nullable INTEGER with
+ * no default, same reasoning as every other additive column here — see MIGRATION_12_13's
+ * comment for the full explanation of the @ColumnInfo(defaultValue) pitfall this sidesteps.
+ * Existing saved locations get NULL, which SavedLocation reads as "not marked safe" — exactly
+ * right, since this is opt-in per the feature's own design decision.
+ */
+val MIGRATION_15_16 = Migration(15, 16) { db ->
+    db.execSQL("ALTER TABLE saved_location ADD COLUMN isSafeFromSweeping INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15
+    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
 )
 
 /*

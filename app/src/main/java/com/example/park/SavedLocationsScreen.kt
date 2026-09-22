@@ -231,10 +231,13 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
     customizingLocation?.let { location ->
         LocationStyleDialog(
             location = location,
-            onSave = { name, colorHex, iconEmoji, photoPath ->
+            onSave = { name, colorHex, iconEmoji, photoPath, isSafeFromSweeping ->
                 scope.launch {
                     AppDatabase.getInstance(context).savedLocationDao().update(
-                        location.copy(name = name, colorHex = colorHex, iconEmoji = iconEmoji, photoPath = photoPath)
+                        location.copy(
+                            name = name, colorHex = colorHex, iconEmoji = iconEmoji, photoPath = photoPath,
+                            isSafeFromSweeping = isSafeFromSweeping
+                        )
                     )
                     customizingLocation = null
                     reload()

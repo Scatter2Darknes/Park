@@ -474,6 +474,24 @@ fun MapScreen(
         toastMessage = null
     }
 
+    // Checks a safe-tagged Saved Location (LocationStyleDialog's toggle) before falling through
+    // to the normal segment-matching flow — a match skips it entirely: save silently via
+    // saveUnmanagedParkedState (which still runs its own independent RPP check) and close, with
+    // no NoStreetNearby prompt, since the location has already told the app what it is. Every
+    // fresh-point call site below (startParkingFlow's two direct-match branches, and
+    // ChoosingCar's onPick/onAddNew once a car is chosen) routes through this instead of calling
+    // proceedToMatching directly, so the safe-location check always runs first.
+    suspend fun resolveParkingFlow(carId: Long, point: LatLng): ParkingFlowState {
+        val safeLocation = findSafeSavedLocation(context, point)
+        if (safeLocation != null) {
+            saveUnmanagedParkedState(context, carId, point)
+            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+            refreshActiveParkedCars()
+            return ParkingFlowState.Hidden
+        }
+        return proceedToMatching(context, carId, point)
+    }
+
     // Shared by the GPS-based "I'm Parked" button and "Use saved location" — the only
     // difference between them is where the starting point comes from.
     fun startParkingFlow(point: LatLng) {
@@ -486,8 +504,8 @@ fun MapScreen(
             parkingFlowState = when {
                 allCars.isEmpty() -> ParkingFlowState.ChoosingCar(point)
                 alwaysAsk -> ParkingFlowState.ChoosingCar(point)
-                allCars.size == 1 -> proceedToMatching(context, allCars.first().id, point)
-                defaultCar != null -> proceedToMatching(context, defaultCar.id, point)
+                allCars.size == 1 -> resolveParkingFlow(allCars.first().id, point)
+                defaultCar != null -> resolveParkingFlow(defaultCar.id, point)
                 else -> ParkingFlowState.ChoosingCar(point) // multiple cars, none marked default — genuinely ambiguous
             }
         }
@@ -1481,12 +1499,12 @@ fun MapScreen(
                 CarSelectionDialog(
                     cars = cars,
                     onPick = { car ->
-                        scope.launch { parkingFlowState = proceedToMatching(context, car.id, state.point) }
+                        scope.launch { parkingFlowState = resolveParkingFlow(car.id, state.point) }
                     },
                     onAddNew = { name ->
                         scope.launch {
                             val newId = AppDatabase.getInstance(context).carDao().insert(Car(name = name))
-                            parkingFlowState = proceedToMatching(context, newId, state.point)
+                            parkingFlowState = resolveParkingFlow(newId, state.point)
                         }
                     },
                     onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
