@@ -74,6 +74,8 @@ fun SettingsScreen(
     var notificationOffsetMinutes by remember { mutableStateOf(SettingsDefaults.NOTIFICATION_OFFSET_MINUTES) }
     var urgentReminderEnabled by remember { mutableStateOf(SettingsDefaults.URGENT_REMINDER_ENABLED) }
     var urgentOffsetMinutes by remember { mutableStateOf(SettingsDefaults.URGENT_OFFSET_MINUTES) }
+    var movedCarAction by remember { mutableStateOf(SettingsDefaults.MOVED_CAR_ACTION) }
+    var movedCarActionMenuExpanded by remember { mutableStateOf(false) }
     var soonThresholdDays by remember { mutableStateOf(SettingsDefaults.SOON_THRESHOLD_DAYS) }
     var imminentThresholdDays by remember { mutableStateOf(SettingsDefaults.IMMINENT_THRESHOLD_DAYS) }
     var statusColors by remember { mutableStateOf(SweepStatusColors()) }
@@ -128,6 +130,7 @@ fun SettingsScreen(
         notificationOffsetMinutes = settings.notificationOffsetMinutes.first()
         urgentReminderEnabled = settings.urgentReminderEnabled.first()
         urgentOffsetMinutes = settings.urgentOffsetMinutes.first()
+        movedCarAction = settings.movedCarAction.first()
         informationalTimeoutMinutes = settings.informationalNotificationTimeoutMinutes.first()
         soonThresholdDays = settings.soonThresholdDays.first()
         imminentThresholdDays = settings.imminentThresholdDays.first()
@@ -405,6 +408,55 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Text("\"I moved my car\" action", style = MaterialTheme.typography.labelMedium)
+        DescriptionToggle(
+            "What tapping the urgent reminder's “I moved my car” button does. Clear & " +
+                    "open map just ends the reminder — the default. Auto re-park from GPS tries " +
+                    "to detect your new spot the same way Bluetooth auto-detect does, falling back " +
+                    "to the confirm dialog when it can't find a nearby street. Ask every time always " +
+                    "opens the confirm dialog with your current GPS point pre-filled."
+        )
+        Spacer(Modifier.height(8.dp))
+        val movedCarActionLabel = when (movedCarAction) {
+            MovedCarAction.CLEAR_AND_OPEN_MAP -> "Clear & open map"
+            MovedCarAction.SILENT_AUTO_REPARK -> "Auto re-park from GPS"
+            MovedCarAction.FORCE_PARKING_DIALOG -> "Ask every time"
+        }
+        ExposedDropdownMenuBox(
+            expanded = movedCarActionMenuExpanded,
+            onExpandedChange = { movedCarActionMenuExpanded = it }
+        ) {
+            OutlinedTextField(
+                value = movedCarActionLabel,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("When I tap “I moved my car”") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = movedCarActionMenuExpanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(
+                expanded = movedCarActionMenuExpanded,
+                onDismissRequest = { movedCarActionMenuExpanded = false }
+            ) {
+                listOf(
+                    MovedCarAction.CLEAR_AND_OPEN_MAP to "Clear & open map",
+                    MovedCarAction.SILENT_AUTO_REPARK to "Auto re-park from GPS",
+                    MovedCarAction.FORCE_PARKING_DIALOG to "Ask every time"
+                ).forEach { (action, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            movedCarAction = action
+                            movedCarActionMenuExpanded = false
+                            scope.launch { settings.setMovedCarAction(action) }
+                        }
+                    )
                 }
             }
         }
