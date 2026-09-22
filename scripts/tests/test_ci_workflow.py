@@ -65,6 +65,38 @@ class CiContentTest(unittest.TestCase):
         self.assertRegex(body, r"java-version: 2[1-9]|java-version: 17")
 
 
+class AndroidSdkSetupTest(unittest.TestCase):
+    """Both workflows use the runner's own SDK plus two sdkmanager installs. android-actions/setup-android@v3 fails on the
+    runners ("Failed to find package 'tools'"), so it must not come back in either."""
+
+    WORKFLOW_TEXTS = (("ci.yml", CI), ("instrumented.yml", INSTRUMENTED))
+
+    def test_the_setup_action_is_gone_and_the_runners_sdk_is_used(self):
+        for name, text in self.WORKFLOW_TEXTS:
+            body = code_lines(text)
+            with self.subTest(workflow=name):
+                self.assertNotIn("android-actions/setup-android", body)
+                self.assertIn("/usr/local/lib/android/sdk", text)
+                self.assertIn('--install "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS"', body)
+                self.assertIn('echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"', body)
+
+    def test_the_platform_it_installs_is_the_projects_compile_sdk(self):
+        gradle = (ROOT / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+        compile_sdk = re.search(r"compileSdk\s*\{\s*version\s*=\s*release\((\d+)\)", gradle)
+        self.assertIsNotNone(compile_sdk, "compileSdk is no longer written as release(N): update this test and the workflows")
+        for name, text in self.WORKFLOW_TEXTS:
+            with self.subTest(workflow=name):
+                self.assertIn(f'ANDROID_PLATFORM: "platforms;android-{compile_sdk.group(1)}.0"', code_lines(text))
+                self.assertRegex(code_lines(text), r'ANDROID_BUILD_TOOLS: "build-tools;\d+\.\d+\.\d+"')
+
+    def test_the_two_workflows_have_the_same_sdk_step(self):
+        def sdk_step(text):
+            match = re.search(r"      # GitHub's Ubuntu runners already have.*?(?=\n      # Restores|\n      - name: Set up Gradle)", text, re.S)
+            self.assertIsNotNone(match, "the 'Set up Android SDK' step (with its comment) wasn't found")
+            return match.group(0).strip()
+        self.assertEqual(sdk_step(CI), sdk_step(INSTRUMENTED))
+
+
 class InstrumentedWorkflowTest(unittest.TestCase):
     def test_it_is_manual_only(self):
         body = code_lines(INSTRUMENTED)
