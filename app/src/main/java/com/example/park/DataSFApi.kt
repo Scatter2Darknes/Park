@@ -62,7 +62,9 @@ private suspend fun fetchSweepingQuery(context: Context, query: String, what: St
 suspend fun fetchWithRetry(context: Context, limit: Int, offset: Int, maxAttempts: Int = 3): String =
     retrySweeping(context, "offset $offset", maxAttempts) { fetchSweepingPage(context, limit, offset) }
 
-private suspend fun <T> retrySweeping(context: Context, what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
+// Not private: StreetSegmentRepository reuses this to read the feed's total count upfront
+// (for "X out of N" progress display) with the same retry behavior fetchAllSegments itself uses.
+suspend fun <T> retrySweeping(context: Context, what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
     // A configured DataSF app token was assumed to move the client out of Socrata's shared
     // anonymous throttling pool entirely — but real testing at 300ms/1s-2s-3s (this function's
     // first tuning for the token path) still hit HTTP 425 with an empty body at basically the

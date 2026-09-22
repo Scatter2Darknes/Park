@@ -71,7 +71,11 @@ object SettingsDefaults {
     const val INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES = 5
     const val SOON_THRESHOLD_DAYS = 3f
     const val IMMINENT_THRESHOLD_DAYS = 2f
-    const val REFRESH_INTERVAL_HOURS = 24
+    // 72h (3 days) — these datasets (street sweeping schedules) change rarely, so a daily
+    // background refresh was mostly wasted data usage; the Settings slider still goes down to
+    // 6h for anyone who wants a tighter interval, and this default doesn't affect a manual
+    // "Refresh Data Now" tap or anyone's already-saved preference.
+    const val REFRESH_INTERVAL_HOURS = 72
     const val DRIVING_MODE_ZOOM = 19f
     const val DRIVING_MODE_AUTO_CENTER = true
     const val DRIVING_MODE_AUTO_ZOOM = true // preserves prior always-zoom-on-driving-mode behavior

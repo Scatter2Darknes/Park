@@ -19,7 +19,15 @@ class RppZoneRepository(private val context: Context) {
             // Stamp/prune bookkeeping — see StaleRowPruning.kt.
             val syncId = System.currentTimeMillis()
             val existingCount = db.rppZoneRegulationDao().count()
-            StreetDataSyncCenter.onRppSyncAttemptStarted()
+            // Read once upfront, purely for the "X out of N" progress display — see
+            // StreetSegmentRepository's identical call for why a failure here doesn't abort the sync.
+            val totalEstimate = try {
+                retryRpp("count query") { fetchRppTotal() }
+            } catch (e: Exception) {
+                android.util.Log.w("RppSync", "Couldn't read the RPP feed's total count upfront — progress will show without a total", e)
+                null
+            }
+            StreetDataSyncCenter.onRppSyncAttemptStarted(totalEstimate)
             var fetchedThisAttempt = 0
             try {
                 val fetch = fetchAllRppRegulations { page ->

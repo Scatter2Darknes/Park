@@ -22,66 +22,90 @@ class MeteredZoneRepository(private val context: Context) {
             val syncId = System.currentTimeMillis()
             val existingCount = db.meteredZoneDao().count()
 
-            // Locations first, buffered in memory (not inserted page-by-page like RPP does,
-            // since a location row isn't the final entity here — it needs the schedule join
-            // below to become one, or the location-only fallback if that join can't happen).
-            val locations = mutableMapOf<String, MeterLocation>()
-            val locationFetch = fetchAllMeterLocations { page ->
-                page.forEach { locations[it.postId] = it }
-            }
-            Log.d("MeterSync", "Meter location fetch complete=${locationFetch.complete}, ${locations.size} active meters")
-
-            val schedules = try {
-                val collected = mutableListOf<MeterSchedule>()
-                val fetch = fetchAllMeterSchedules { page -> collected.addAll(page) }
-                Log.d("MeterSync", "Meter schedule fetch complete=${fetch.complete}, ${collected.size} rows")
-                collected
-            } catch (e: Exception) {
-                Log.w("MeterSync", "Meter schedule fetch failed — falling back to location-only meter badges (no hours gating)", e)
-                null
-            }
-
-            val zones = if (schedules != null) {
-                schedules.mapNotNull { schedule ->
-                    val loc = locations[schedule.postId] ?: return@mapNotNull null
-                    MeteredZone(
-                        id = "${schedule.postId}#${schedule.priority}",
-                        postId = schedule.postId,
-                        lat = loc.lat,
-                        lng = loc.lng,
-                        streetName = loc.streetName,
-                        days = schedule.daysApplied,
-                        hrsBegin = schedule.fromTime?.let { parseMeterTimeToMilitary(it) },
-                        hrsEnd = schedule.toTime?.let { parseMeterTimeToMilitary(it) },
-                        timeLimitMinutes = parseMeterTimeLimitMinutes(schedule.timeLimitText),
-                        lastSeenSyncId = syncId
-                    )
-                }
-            } else {
-                locations.values.map { loc ->
-                    MeteredZone(
-                        id = "${loc.postId}#location",
-                        postId = loc.postId,
-                        lat = loc.lat,
-                        lng = loc.lng,
-                        streetName = loc.streetName,
-                        days = null, hrsBegin = null, hrsEnd = null, timeLimitMinutes = null,
-                        lastSeenSyncId = syncId
-                    )
-                }
-            }
-            db.meteredZoneDao().insertAll(zones)
-
-            // Prune only against the LOCATION fetch's completeness — the reliable half. A
-            // schedule-fetch failure alone (already handled above) shouldn't also risk this
-            // deleting otherwise-good location-only rows.
             try {
-                pruneStaleMeteredZones(context, syncId, existingCount, locationFetch)
-            } catch (e: Exception) {
-                Log.w("MeterSync", "Stale-meter cleanup failed", e)
-            }
+                // Locations first, buffered in memory (not inserted page-by-page like RPP does,
+                // since a location row isn't the final entity here — it needs the schedule join
+                // below to become one, or the location-only fallback if that join can't happen).
+                val locationTotal = try {
+                    retryMeter("meter location count query") { fetchMeterLocationTotal() }
+                } catch (e: Exception) {
+                    Log.w("MeterSync", "Couldn't read the meter-location feed's total count upfront — progress will show without a total", e)
+                    null
+                }
+                StreetDataSyncCenter.onMeterSyncPhaseStarted("meter locations", locationTotal)
+                val locations = mutableMapOf<String, MeterLocation>()
+                var locationsFetchedSoFar = 0
+                val locationFetch = fetchAllMeterLocations { page ->
+                    page.forEach { locations[it.postId] = it }
+                    locationsFetchedSoFar += page.size
+                    StreetDataSyncCenter.onMeterSyncAttemptProgress(locationsFetchedSoFar)
+                }
+                Log.d("MeterSync", "Meter location fetch complete=${locationFetch.complete}, ${locations.size} active meters")
 
-            return zones.size
+                val scheduleTotal = try {
+                    retryMeter("meter schedule count query") { fetchMeterScheduleTotal() }
+                } catch (e: Exception) {
+                    Log.w("MeterSync", "Couldn't read the meter-schedule feed's total count upfront — progress will show without a total", e)
+                    null
+                }
+                StreetDataSyncCenter.onMeterSyncPhaseStarted("meter operating schedules", scheduleTotal)
+                val schedules = try {
+                    val collected = mutableListOf<MeterSchedule>()
+                    val fetch = fetchAllMeterSchedules { page ->
+                        collected.addAll(page)
+                        StreetDataSyncCenter.onMeterSyncAttemptProgress(collected.size)
+                    }
+                    Log.d("MeterSync", "Meter schedule fetch complete=${fetch.complete}, ${collected.size} rows")
+                    collected
+                } catch (e: Exception) {
+                    Log.w("MeterSync", "Meter schedule fetch failed — falling back to location-only meter badges (no hours gating)", e)
+                    null
+                }
+
+                val zones = if (schedules != null) {
+                    schedules.mapNotNull { schedule ->
+                        val loc = locations[schedule.postId] ?: return@mapNotNull null
+                        MeteredZone(
+                            id = "${schedule.postId}#${schedule.priority}",
+                            postId = schedule.postId,
+                            lat = loc.lat,
+                            lng = loc.lng,
+                            streetName = loc.streetName,
+                            days = schedule.daysApplied,
+                            hrsBegin = schedule.fromTime?.let { parseMeterTimeToMilitary(it) },
+                            hrsEnd = schedule.toTime?.let { parseMeterTimeToMilitary(it) },
+                            timeLimitMinutes = parseMeterTimeLimitMinutes(schedule.timeLimitText),
+                            lastSeenSyncId = syncId
+                        )
+                    }
+                } else {
+                    locations.values.map { loc ->
+                        MeteredZone(
+                            id = "${loc.postId}#location",
+                            postId = loc.postId,
+                            lat = loc.lat,
+                            lng = loc.lng,
+                            streetName = loc.streetName,
+                            days = null, hrsBegin = null, hrsEnd = null, timeLimitMinutes = null,
+                            lastSeenSyncId = syncId
+                        )
+                    }
+                }
+                db.meteredZoneDao().insertAll(zones)
+
+                // Prune only against the LOCATION fetch's completeness — the reliable half. A
+                // schedule-fetch failure alone (already handled above) shouldn't also risk this
+                // deleting otherwise-good location-only rows.
+                try {
+                    pruneStaleMeteredZones(context, syncId, existingCount, locationFetch)
+                } catch (e: Exception) {
+                    Log.w("MeterSync", "Stale-meter cleanup failed", e)
+                }
+
+                return zones.size
+            } finally {
+                StreetDataSyncCenter.onMeterSyncAttemptEnded()
+            }
         } finally {
             fetchMutex.unlock()
         }

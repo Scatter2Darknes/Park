@@ -52,7 +52,9 @@ private suspend fun meterLocationGet(query: String, what: String): String = with
     }
 }
 
-private suspend fun <T> retryMeter(what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
+// Not private: MeteredZoneRepository reuses this to read each phase's total count upfront (for
+// "X out of N" progress display) with the same retry behavior the page fetches themselves use.
+suspend fun <T> retryMeter(what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
     var lastError: Exception? = null
     repeat(maxAttempts) { attempt ->
         try {
@@ -64,6 +66,22 @@ private suspend fun <T> retryMeter(what: String, maxAttempts: Int = 3, request: 
         }
     }
     throw lastError ?: Exception("Unknown fetch failure at $what")
+}
+
+/** The meter-location feed's own row count for the active-meter filter — used both to check a
+ *  fetch was complete (see FeedFetch/pruneSkipReason) and, read upfront, for "X out of N"
+ *  progress display. */
+suspend fun fetchMeterLocationTotal(): Int? =
+    JSONObject(meterLocationGet(meterLocationQuery("returnCountOnly=true"), "meter location count query"))
+        .takeIf { it.has("count") && !it.isNull("count") }?.optInt("count", -1)?.takeIf { it >= 0 }
+
+/** Schedule-feed counterpart of [fetchMeterLocationTotal] — a genuine server-reported count
+ *  (Socrata's own count(*)), not a stand-in. */
+suspend fun fetchMeterScheduleTotal(): Int? {
+    val url = "$METER_SCHEDULE_BASE_URL?" +
+        "\$select=${URLEncoder.encode("count(*)", "UTF-8")}&" +
+        "\$where=${URLEncoder.encode(METER_SCHEDULE_WHERE_CLAUSE, "UTF-8")}"
+    return parseSocrataCount(meterScheduleGet(url, "meter schedule count query"))
 }
 
 /** One meter location — before the schedule join, so it has no hours yet (see joinMeterFeeds). */
@@ -124,12 +142,7 @@ internal suspend fun fetchAllMeterLocations(onPage: suspend (List<MeterLocation>
         if (rawCount == 0) break
     }
     val serverTotal = if (complete) {
-        readServerTotalOrNull({ Log.d("MeterSync", it) }) {
-            retryMeter("meter location count query") {
-                JSONObject(meterLocationGet(meterLocationQuery("returnCountOnly=true"), "meter location count query"))
-                    .takeIf { it.has("count") && !it.isNull("count") }?.optInt("count", -1)?.takeIf { it >= 0 }
-            }
-        }
+        readServerTotalOrNull({ Log.d("MeterSync", it) }) { retryMeter("meter location count query") { fetchMeterLocationTotal() } }
     } else null
     return FeedFetch(keptRows = kept, rawRows = offset, complete = complete, serverTotal = serverTotal)
 }
@@ -219,7 +232,15 @@ internal suspend fun fetchAllMeterSchedules(onPage: suspend (List<MeterSchedule>
         kept += page.size
         Log.d("MeterSync", "Fetched meter-schedule page at offset $offset: $rawCount raw, ${page.size} kept")
         offset += rawCount
-        if (rawCount < pageSize) return FeedFetch(keptRows = kept, rawRows = offset, complete = true, serverTotal = offset)
+        if (rawCount < pageSize) {
+            // A genuine server-reported total (not just "whatever we happened to fetch") —
+            // without this, pruneSkipReason's "did we get truncated" check against rawRows was
+            // trivially satisfied by construction, never actually catching a truncated fetch.
+            val serverTotal = readServerTotalOrNull({ Log.d("MeterSync", it) }) {
+                retryMeter("meter schedule count query") { fetchMeterScheduleTotal() }
+            }
+            return FeedFetch(keptRows = kept, rawRows = offset, complete = true, serverTotal = serverTotal)
+        }
     }
     return FeedFetch(keptRows = kept, rawRows = offset, complete = false, serverTotal = null)
 }

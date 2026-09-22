@@ -37,11 +37,36 @@ object StreetDataSyncCenter {
     private val _currentAttemptFetchedCount = MutableStateFlow<Int?>(null)
     val currentAttemptFetchedCount: StateFlow<Int?> = _currentAttemptFetchedCount.asStateFlow()
 
+    // The feed's own row count, read once upfront (a single lightweight count query) before
+    // paging starts, purely so the UI can show "X out of N" instead of just "X so far" — every
+    // feed already fetches this same total at the END of a sync anyway (see StaleRowPruning.kt's
+    // pruneSkipReason, which needs it to confirm a fetch wasn't truncated), so this is a second,
+    // independent call to the same lightweight endpoint rather than a restructuring of that
+    // existing, tested pagination/pruning code. Null if the upfront read failed or hasn't
+    // happened yet — the UI falls back to "X so far" in that case, same as before this existed.
+    private val _currentAttemptTotalCount = MutableStateFlow<Int?>(null)
+    val currentAttemptTotalCount: StateFlow<Int?> = _currentAttemptTotalCount.asStateFlow()
+
     // Same idea, for the RPP zone regulation feed — a separate fetch that runs sequentially
     // after the sweeping sync (see triggerManualRefresh and SweepingDataRefreshWorker), so its
     // progress is tracked independently rather than folded into the count above.
     private val _rppCurrentAttemptFetchedCount = MutableStateFlow<Int?>(null)
     val rppCurrentAttemptFetchedCount: StateFlow<Int?> = _rppCurrentAttemptFetchedCount.asStateFlow()
+    private val _rppCurrentAttemptTotalCount = MutableStateFlow<Int?>(null)
+    val rppCurrentAttemptTotalCount: StateFlow<Int?> = _rppCurrentAttemptTotalCount.asStateFlow()
+
+    // Same idea again, for the metered-zone feed (see MeteredZoneRepository.refreshFromNetwork()).
+    // Two phases (meter locations, then meter operating schedules — see MeteredZoneApi.kt for
+    // why they're two separate upstream fetches), tracked as one line whose label changes with
+    // the phase rather than two separate always-visible counters.
+    private val _meterCurrentAttemptFetchedCount = MutableStateFlow<Int?>(null)
+    val meterCurrentAttemptFetchedCount: StateFlow<Int?> = _meterCurrentAttemptFetchedCount.asStateFlow()
+    private val _meterCurrentAttemptTotalCount = MutableStateFlow<Int?>(null)
+    val meterCurrentAttemptTotalCount: StateFlow<Int?> = _meterCurrentAttemptTotalCount.asStateFlow()
+    // Display-ready phase label ("meter locations" / "meter operating schedules"), or null when
+    // no meter sync is in flight.
+    private val _meterCurrentAttemptPhase = MutableStateFlow<String?>(null)
+    val meterCurrentAttemptPhase: StateFlow<String?> = _meterCurrentAttemptPhase.asStateFlow()
 
     private val _isSyncRunning = MutableStateFlow(false)
     val isSyncRunning: StateFlow<Boolean> = _isSyncRunning.asStateFlow()
@@ -171,8 +196,11 @@ object StreetDataSyncCenter {
     // Called by StreetSegmentRepository.refreshFromNetwork() — the single place both the
     // periodic worker and manual refresh actually fetch through — so this reflects whichever
     // one is currently running without either caller needing to know about the other.
-    fun onSyncAttemptStarted() {
+    // [total] is the feed's own row count, read upfront if that lightweight query succeeded —
+    // null (the default) shows "X so far" instead of "X out of N".
+    fun onSyncAttemptStarted(total: Int? = null) {
         _currentAttemptFetchedCount.value = 0
+        _currentAttemptTotalCount.value = total
     }
 
     fun onSyncAttemptProgress(fetchedSoFar: Int) {
@@ -181,14 +209,16 @@ object StreetDataSyncCenter {
 
     fun onSyncAttemptEnded() {
         _currentAttemptFetchedCount.value = null
+        _currentAttemptTotalCount.value = null
     }
 
     // Same idea as the three functions above, but for the RPP zone regulation feed — a
     // separate fetch that runs sequentially after the sweeping sync (see
     // RppZoneRepository.refreshFromNetwork()), so this progresses independently rather than
     // being folded into currentAttemptFetchedCount.
-    fun onRppSyncAttemptStarted() {
+    fun onRppSyncAttemptStarted(total: Int? = null) {
         _rppCurrentAttemptFetchedCount.value = 0
+        _rppCurrentAttemptTotalCount.value = total
     }
 
     fun onRppSyncAttemptProgress(fetchedSoFar: Int) {
@@ -197,6 +227,25 @@ object StreetDataSyncCenter {
 
     fun onRppSyncAttemptEnded() {
         _rppCurrentAttemptFetchedCount.value = null
+        _rppCurrentAttemptTotalCount.value = null
+    }
+
+    // Same idea again, for the metered-zone feed's two phases (see MeteredZoneRepository).
+    // [label] is display-ready ("meter locations" / "meter operating schedules").
+    fun onMeterSyncPhaseStarted(label: String, total: Int? = null) {
+        _meterCurrentAttemptPhase.value = label
+        _meterCurrentAttemptFetchedCount.value = 0
+        _meterCurrentAttemptTotalCount.value = total
+    }
+
+    fun onMeterSyncAttemptProgress(fetchedSoFar: Int) {
+        _meterCurrentAttemptFetchedCount.value = fetchedSoFar
+    }
+
+    fun onMeterSyncAttemptEnded() {
+        _meterCurrentAttemptPhase.value = null
+        _meterCurrentAttemptFetchedCount.value = null
+        _meterCurrentAttemptTotalCount.value = null
     }
 
     /**

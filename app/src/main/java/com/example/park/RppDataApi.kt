@@ -81,7 +81,9 @@ suspend fun fetchRppTotal(): Int =
 internal fun parseRppCount(json: String): Int? =
     JSONObject(json).takeIf { it.has("count") && !it.isNull("count") }?.optInt("count", -1)?.takeIf { it >= 0 }
 
-private suspend fun <T> retryRpp(what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
+// Not private: RppZoneRepository reuses this to read the feed's total count upfront (for
+// "X out of N" progress display) with the same retry behavior fetchAllRppRegulations uses.
+suspend fun <T> retryRpp(what: String, maxAttempts: Int = 3, request: suspend () -> T): T {
     var lastError: Exception? = null
     repeat(maxAttempts) { attempt ->
         try {

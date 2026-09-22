@@ -118,6 +118,15 @@ fun SettingsScreen(
     var lastRefreshMillis by remember { mutableStateOf<Long?>(null) }
     val isSyncBusy by StreetDataSyncCenter.isBusy.collectAsState()
     val syncStatusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
+    // Live per-feed progress, mirroring what SyncStatusDialog (the Setup UI) already shows —
+    // this section previously had none of this, only the final syncStatusMessage above.
+    val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
+    val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
+    val rppCurrentAttemptFetchedCount by StreetDataSyncCenter.rppCurrentAttemptFetchedCount.collectAsState()
+    val rppCurrentAttemptTotalCount by StreetDataSyncCenter.rppCurrentAttemptTotalCount.collectAsState()
+    val meterCurrentAttemptPhase by StreetDataSyncCenter.meterCurrentAttemptPhase.collectAsState()
+    val meterCurrentAttemptFetchedCount by StreetDataSyncCenter.meterCurrentAttemptFetchedCount.collectAsState()
+    val meterCurrentAttemptTotalCount by StreetDataSyncCenter.meterCurrentAttemptTotalCount.collectAsState()
     var offsetMenuExpanded by remember { mutableStateOf(false) }
     var urgentOffsetMenuExpanded by remember { mutableStateOf(false) }
     var informationalTimeoutMinutes by remember { mutableStateOf(SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES) }
@@ -1018,6 +1027,31 @@ fun SettingsScreen(
             enabled = !isSyncBusy
         ) {
             Text(if (isSyncBusy) "Refreshing\u2026" else "Refresh Data Now")
+        }
+        // Same three-line progress sequence SyncStatusDialog shows (segments, then RPP zone
+        // regulations, then meters \u2014 see StreetDataSyncCenter/MeteredZoneRepository for why
+        // they run in that order) \u2014 previously this section showed nothing while a refresh
+        // was in flight, only the final syncStatusMessage below once it finished.
+        currentAttemptFetchedCount?.let { fetched ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatFetchProgress("segments", fetched, currentAttemptTotalCount) + " this sync\u2026",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        rppCurrentAttemptFetchedCount?.let { fetched ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatFetchProgress("RPP zone regulations", fetched, rppCurrentAttemptTotalCount) + " this sync\u2026",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        meterCurrentAttemptPhase?.let { phase ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                formatFetchProgress(phase, meterCurrentAttemptFetchedCount ?: 0, meterCurrentAttemptTotalCount) + " this sync\u2026",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         syncStatusMessage?.let {
             Spacer(Modifier.height(4.dp))

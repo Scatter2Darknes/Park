@@ -32,7 +32,16 @@ class StreetSegmentRepository(private val context: Context) {
             // starts writing, for the "did we get suspiciously few rows back" guard.
             val syncId = System.currentTimeMillis()
             val existingCount = db.streetSegmentDao().count()
-            StreetDataSyncCenter.onSyncAttemptStarted()
+            // Read once upfront, purely for the "X out of N" progress display — a failure here
+            // (a bad connection, DataSF being slow) just means the UI falls back to "X so far"
+            // instead of aborting the sync itself.
+            val totalEstimate = try {
+                retrySweeping(context, "count query") { fetchSweepingTotal(context) }
+            } catch (e: Exception) {
+                android.util.Log.w("DataSF", "Couldn't read the segment feed's total count upfront — progress will show without a total", e)
+                null
+            }
+            StreetDataSyncCenter.onSyncAttemptStarted(totalEstimate)
             var fetchedThisAttempt = 0
             try {
                 // Inserted page-by-page rather than accumulated in memory and written once at

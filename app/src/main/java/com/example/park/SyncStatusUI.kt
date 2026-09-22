@@ -29,6 +29,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 
+/** "1,234 of 5,678 segments fetched…" when the feed's total is known (read upfront — see
+ *  StreetSegmentRepository/RppZoneRepository/MeteredZoneRepository), else just "1,234 segments
+ *  fetched…" — shared by the Setup UI (this file) and Settings' "Refresh Data Now" section so
+ *  the two never drift apart on wording. */
+fun formatFetchProgress(label: String, fetched: Int, total: Int?): String =
+    if (total != null && total > 0) "${"%,d".format(fetched)} of ${"%,d".format(total)} $label fetched…"
+    else "${"%,d".format(fetched)} $label fetched…"
+
 /**
  * A full-width bar rendered once in MainActivity, above whichever screen is currently showing
  * (not floating on top of it) — so it persists across every screen instead of the "syncing"
@@ -40,6 +48,7 @@ import androidx.compose.ui.window.Dialog
 fun SyncStatusBar(onClick: () -> Unit) {
     val totalSegmentCount by StreetDataSyncCenter.totalSegmentCount.collectAsState()
     val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
+    val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
     val isSyncRunning by StreetDataSyncCenter.isSyncRunning.collectAsState()
 
     Surface(
@@ -75,7 +84,7 @@ fun SyncStatusBar(onClick: () -> Unit) {
             val count = totalSegmentCount
             Text(
                 when {
-                    attemptCount != null -> "Syncing street data\u2026 ${"%,d".format(attemptCount)} fetched this sync"
+                    attemptCount != null -> "Syncing street data\u2026 ${formatFetchProgress("segments", attemptCount, currentAttemptTotalCount)}"
                     isSyncRunning && (count ?: 0) > 0 -> "Syncing street data\u2026 ${"%,d".format(count)} loaded"
                     isSyncRunning -> "Syncing street data\u2026"
                     (count ?: 0) > 0 -> "${"%,d".format(count)} segments loaded so far \u2014 tap for options"
@@ -98,7 +107,12 @@ fun SyncStatusBar(onClick: () -> Unit) {
 fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
     val totalSegmentCount by StreetDataSyncCenter.totalSegmentCount.collectAsState()
     val currentAttemptFetchedCount by StreetDataSyncCenter.currentAttemptFetchedCount.collectAsState()
+    val currentAttemptTotalCount by StreetDataSyncCenter.currentAttemptTotalCount.collectAsState()
     val rppCurrentAttemptFetchedCount by StreetDataSyncCenter.rppCurrentAttemptFetchedCount.collectAsState()
+    val rppCurrentAttemptTotalCount by StreetDataSyncCenter.rppCurrentAttemptTotalCount.collectAsState()
+    val meterCurrentAttemptPhase by StreetDataSyncCenter.meterCurrentAttemptPhase.collectAsState()
+    val meterCurrentAttemptFetchedCount by StreetDataSyncCenter.meterCurrentAttemptFetchedCount.collectAsState()
+    val meterCurrentAttemptTotalCount by StreetDataSyncCenter.meterCurrentAttemptTotalCount.collectAsState()
     val isSyncRunning by StreetDataSyncCenter.isSyncRunning.collectAsState()
     val isBusy by StreetDataSyncCenter.isBusy.collectAsState()
     val statusMessage by StreetDataSyncCenter.statusMessage.collectAsState()
@@ -133,7 +147,7 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                 val count = totalSegmentCount ?: 0
                 Text(
                     when {
-                        attemptCount != null -> "${"%,d".format(attemptCount)} segments fetched this sync\u2026"
+                        attemptCount != null -> formatFetchProgress("segments", attemptCount, currentAttemptTotalCount) + " this sync\u2026"
                         count > 0 -> "${"%,d".format(count)} segments loaded so far\u2026"
                         isSyncRunning -> "Downloading now \u2014 this can take a minute on first launch."
                         else -> "Not synced yet."
@@ -149,7 +163,20 @@ fun SyncStatusDialog(onDismiss: () -> Unit, onGoToSettings: () -> Unit) {
                 rppCurrentAttemptFetchedCount?.let { count ->
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "${"%,d".format(count)} RPP zone regulations fetched this sync…",
+                        formatFetchProgress("RPP zone regulations", count, rppCurrentAttemptTotalCount) + " this sync…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                // Meter sync runs as its own two-phase pass (locations, then operating
+                // schedules — see MeteredZoneRepository) after RPP — same reasoning as the RPP
+                // line above: without this, "Sync Now" looks hung during this third phase.
+                meterCurrentAttemptPhase?.let { phase ->
+                    val fetched = meterCurrentAttemptFetchedCount ?: 0
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        formatFetchProgress(phase, fetched, meterCurrentAttemptTotalCount) + " this sync…",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
