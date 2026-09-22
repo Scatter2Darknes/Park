@@ -252,6 +252,7 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
                     // The location's lat/lng never change in this dialog, so a recompute is
                     // only needed when the safe flag itself flipped — see
                     // SavedLocationRecompute.kt's doc comment for what each direction does.
+                    android.util.Log.d("SavedLocationRecompute", "onSave: '${location.name}' wasSafe=$wasSafe -> isSafeFromSweeping=$isSafeFromSweeping")
                     when {
                         wasSafe && !isSafeFromSweeping -> reevaluateCarsFormerlySafeAt(context, location.id)
                         !wasSafe && isSafeFromSweeping -> convertCarsNowSafeAt(context, updated)
