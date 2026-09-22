@@ -42,6 +42,12 @@ sealed class ParkingFlowState {
     // See proceedToMatching's routing and saveUnmanagedParkedState.
     data class NoStreetNearby(val carId: Long, val point: LatLng) : ParkingFlowState()
 
+    // The manual "I'm Parked" point matched a safe-tagged Saved Location (see
+    // MapScreen.kt's resolveParkingFlow) — being near it isn't proof the car is actually IN
+    // the garage rather than legally parked on the street out front, so this asks instead of
+    // assuming (unlike Bluetooth auto-park, where the assumption is fine).
+    data class ConfirmingSafeLocation(val carId: Long, val location: SavedLocation, val point: LatLng) : ParkingFlowState()
+
     // Confirmation step for the "select from map" escape hatch specifically — every other
     // selection path (distance-sorted list, manual picker) already shows the street/side back
     // to the user before committing; a map tap had no equivalent check before this.

@@ -475,19 +475,20 @@ fun MapScreen(
     }
 
     // Checks a safe-tagged Saved Location (LocationStyleDialog's toggle) before falling through
-    // to the normal segment-matching flow — a match skips it entirely: save silently via
-    // saveUnmanagedParkedState (which still runs its own independent RPP check) and close, with
-    // no NoStreetNearby prompt, since the location has already told the app what it is. Every
-    // fresh-point call site below (startParkingFlow's two direct-match branches, and
-    // ChoosingCar's onPick/onAddNew once a car is chosen) routes through this instead of calling
-    // proceedToMatching directly, so the safe-location check always runs first.
+    // to the normal segment-matching flow. Unlike Bluetooth auto-park (where "car disconnected
+    // near a safe spot" is already a strong signal, so it's fine to assume), a manual "I'm
+    // Parked" tap only proves the PHONE is near the safe location — not that the car is
+    // actually sitting in the garage rather than, say, legally parked on the street right in
+    // front of it. So a match here asks instead of assuming: ConfirmingSafeLocation. "Yes"
+    // saves silently via saveUnmanagedParkedState (still runs its own independent RPP check);
+    // "No" falls through to the normal proceedToMatching flow, matching the pre-safe-location
+    // "I'm Parked" behavior exactly. Every fresh-point call site below (startParkingFlow's two
+    // direct-match branches, and ChoosingCar's onPick/onAddNew once a car is chosen) routes
+    // through this instead of calling proceedToMatching directly.
     suspend fun resolveParkingFlow(carId: Long, point: LatLng): ParkingFlowState {
         val safeLocation = findSafeSavedLocation(context, point)
         if (safeLocation != null) {
-            saveUnmanagedParkedState(context, carId, point, viaSafeLocationId = safeLocation.id)
-            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-            refreshActiveParkedCars()
-            return ParkingFlowState.Hidden
+            return ParkingFlowState.ConfirmingSafeLocation(carId, safeLocation, point)
         }
         return proceedToMatching(context, carId, point)
     }
@@ -1675,6 +1676,33 @@ fun MapScreen(
                 },
                 confirmButton = {},
                 dismissButton = { TextButton(onClick = { parkingFlowState = ParkingFlowState.Hidden }) { Text("Cancel") } }
+            )
+            is ParkingFlowState.ConfirmingSafeLocation -> AlertDialog(
+                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                title = { Text("Park at ${state.location.name}?") },
+                text = {
+                    Text(
+                        "Did you park at “${state.location.name}” and not on a street-cleaning " +
+                                "segment — like a garage or driveway?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        scope.launch {
+                            saveUnmanagedParkedState(context, state.carId, state.point, viaSafeLocationId = state.location.id)
+                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                            refreshActiveParkedCars()
+                            parkingFlowState = ParkingFlowState.Hidden
+                        }
+                    }) { Text("Yes") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        // Not actually in the garage — fall through to the ordinary flow exactly
+                        // as if this Saved Location had never matched at all.
+                        scope.launch { parkingFlowState = proceedToMatching(context, state.carId, state.point) }
+                    }) { Text("No, check the street") }
+                }
             )
             is ParkingFlowState.PickingViaMap -> {
                 MapInstructionBanner(text = "Tap a street on the map to select it")
