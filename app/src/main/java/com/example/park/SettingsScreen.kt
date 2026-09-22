@@ -93,6 +93,7 @@ fun SettingsScreen(
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
     var tunnelAutoDimEnabled by remember { mutableStateOf(SettingsDefaults.TUNNEL_AUTO_DIM_ENABLED) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
+    var showMeterBadges by remember { mutableStateOf(SettingsDefaults.SHOW_METER_BADGES) }
     var tileCacheMaxMb by remember { mutableStateOf(SettingsDefaults.TILE_CACHE_MAX_MB) }
     var confirmingClearCache by remember { mutableStateOf(false) }
     var stadiaApiKeyOverride by remember { mutableStateOf("") }
@@ -147,6 +148,7 @@ fun SettingsScreen(
         showImminentCountdown = settings.showImminentCountdown.first()
         tunnelAutoDimEnabled = settings.tunnelAutoDimEnabled.first()
         showRppZoneLabels = settings.showRppZoneLabels.first()
+        showMeterBadges = settings.showMeterBadges.first()
         tileCacheMaxMb = settings.tileCacheMaxMb.first()
         cacheSizeBytes = tileCacheSizeBytes()
         lastRefreshMillis = settings.lastRefreshMillis.first()
@@ -792,6 +794,28 @@ fun SettingsScreen(
                 onCheckedChange = { checked ->
                     showRppZoneLabels = checked
                     scope.launch { settings.setShowRppZoneLabels(checked) }
+                }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Show meter badges", style = MaterialTheme.typography.labelMedium)
+                DescriptionToggle(
+                    "Shows a \"$ Metered\" badge on nearby currently-enforced parking meters " +
+                            "— separate from street cleaning, since a curb can be both swept " +
+                            "and metered at once."
+                )
+            }
+            Switch(
+                checked = showMeterBadges,
+                onCheckedChange = { checked ->
+                    showMeterBadges = checked
+                    scope.launch { settings.setShowMeterBadges(checked) }
                 }
             )
         }

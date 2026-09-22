@@ -48,6 +48,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -300,6 +301,7 @@ fun MapScreen(
     var statusColors by remember { mutableStateOf(SweepStatusColors()) }
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
+    var showMeterBadges by remember { mutableStateOf(SettingsDefaults.SHOW_METER_BADGES) }
     // "CAUTIOUS" (default) keeps the original two-dialog confirm-then-pin flow; "SIMPLE"
     // collapses it into QuickParkConfirmDialog for someone who's decided they'd rather trade
     // that extra checkpoint for fewer taps. See ParkingNotificationsSection in SettingsScreen.
@@ -336,6 +338,7 @@ fun MapScreen(
         lastRefreshMillis = SettingsRepository(context).lastRefreshMillis.first()
         showImminentCountdown = SettingsRepository(context).showImminentCountdown.first()
         showRppZoneLabels = SettingsRepository(context).showRppZoneLabels.first()
+        showMeterBadges = SettingsRepository(context).showMeterBadges.first()
         tunnelAutoDimEnabled = SettingsRepository(context).tunnelAutoDimEnabled.first()
         parkingConfirmationStyle = SettingsRepository(context).parkingConfirmationStyle.first()
         // The map (below) isn't created until this flips true. Without this gate, the
@@ -701,6 +704,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlayRef
                             )
@@ -793,6 +797,7 @@ fun MapScreen(
                                         statusColors = statusColors,
                                         showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                         onSegmentClick = ::handleSegmentTap,
                                         locationOverlay = locationOverlayRef
                                     )
@@ -818,6 +823,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlay
                             )
@@ -1405,6 +1411,7 @@ fun MapScreen(
                                 statusColors = statusColors,
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
+                                showMeterBadges = showMeterBadges,
                                 onSegmentClick = ::handleSegmentTap,
                                 locationOverlay = locationOverlayRef
                             )
@@ -1590,37 +1597,105 @@ fun MapScreen(
                     }
                 )
             }
-            is ParkingFlowState.AskingForPin -> AlertDialog(
-                onDismissRequest = { /* require an explicit choice */ },
-                title = { Text("Add an exact pin?") },
-                text = {
-                    Column {
-                        Text("${state.segment.corridor} will be highlighted either way.")
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(onClick = {
-                            scope.launch {
-                                saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
+            is ParkingFlowState.AskingForPin -> {
+                // Checked here (rather than gating the dialog's shape entirely) so the extra
+                // option only appears once a confident, currently-enforced MeteredZone match is
+                // actually known for this point — see findConfidentMeteredMatch.
+                var meterMatch by remember(state) { mutableStateOf<MeteredZone?>(null) }
+                LaunchedEffect(state) {
+                    meterMatch = findConfidentMeteredMatch(context, state.point)
+                }
+                AlertDialog(
+                    onDismissRequest = { /* require an explicit choice */ },
+                    title = { Text("Add an exact pin?") },
+                    text = {
+                        Column {
+                            Text("${state.segment.corridor} will be highlighted either way.")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(onClick = {
+                                scope.launch {
+                                    saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
+                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                    refreshActiveParkedCars()
+                                    parkingFlowState = ParkingFlowState.Hidden
+                                }
+                            }) { Text("Yes, pin my current location") }
+                            TextButton(onClick = {
+                                parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
+                            }) { Text("Drop pin manually on map") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    saveParkedState(context, state.carId, state.segment, state.point)
+                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                    refreshActiveParkedCars()
+                                    parkingFlowState = ParkingFlowState.Hidden
+                                }
+                            }) { Text("No, just highlight street") }
+                            meterMatch?.let { meter ->
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider()
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(onClick = {
+                                    parkingFlowState = ParkingFlowState.AskingForMeterTimer(state.carId, state.segment, state.point, meter)
+                                }) { Text("Set a meter timer?") }
                             }
-                        }) { Text("Yes, pin my current location") }
-                        TextButton(onClick = {
-                            parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
-                        }) { Text("Drop pin manually on map") }
-                        TextButton(onClick = {
-                            scope.launch {
-                                saveParkedState(context, state.carId, state.segment, state.point)
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
-                            }
-                        }) { Text("No, just highlight street") }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {}
+                )
+            }
+            is ParkingFlowState.AskingForMeterTimer -> {
+                var customMinutesText by remember(state) { mutableStateOf("") }
+
+                suspend fun finishWithMeterTimer(minutes: Int?) {
+                    saveParkedState(context, state.carId, state.segment, state.point)
+                    if (minutes != null && minutes > 0) {
+                        val carName = AppDatabase.getInstance(context).carDao().getAll()
+                            .firstOrNull { it.id == state.carId }?.name ?: "Your car"
+                        val meterLabel = state.meter.streetName?.let { "the meter on $it" } ?: "the meter"
+                        scheduleMeterTimer(context, state.carId, carName, meterLabel, System.currentTimeMillis() + minutes * 60_000L)
                     }
-                },
-                confirmButton = {},
-                dismissButton = {}
-            )
+                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                    refreshActiveParkedCars()
+                    parkingFlowState = ParkingFlowState.Hidden
+                }
+
+                AlertDialog(
+                    onDismissRequest = { /* require an explicit choice */ },
+                    title = { Text("Set a meter timer?") },
+                    text = {
+                        Column {
+                            Text(
+                                "Not tracking meter payment — just a reminder for whenever you plan to move by." +
+                                        (state.meter.timeLimitMinutes?.let { " Posted limit here: $it min." } ?: "")
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            state.meter.timeLimitMinutes?.let { limit ->
+                                TextButton(onClick = { scope.launch { finishWithMeterTimer(limit) } }) {
+                                    Text("In $limit min (posted limit)")
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = customMinutesText,
+                                    onValueChange = { customMinutesText = it.filter(Char::isDigit) },
+                                    label = { Text("Custom — minutes from now") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { scope.launch { finishWithMeterTimer(customMinutesText.toIntOrNull()) } }) {
+                                    Text("Set")
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { scope.launch { finishWithMeterTimer(null) } }) { Text("Skip — just park") }
+                    }
+                )
+            }
             is ParkingFlowState.DroppingPin -> {
                 LaunchedEffect(state) {
                     pinDropCallback = { tappedPoint ->

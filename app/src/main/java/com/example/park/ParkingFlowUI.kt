@@ -55,6 +55,11 @@ sealed class ParkingFlowState {
 
     data class AskingForPin(val carId: Long, val segment: StreetSegment, val point: LatLng) : ParkingFlowState()
 
+    // Offered as an extra option from AskingForPin when a confident, currently-enforced
+    // MeteredZone match exists for the point — see MapScreen.kt. Not a MovedCarAction-style
+    // auto-decision: the user types the actual deadline themselves (see MeterTimer.kt).
+    data class AskingForMeterTimer(val carId: Long, val segment: StreetSegment, val point: LatLng, val meter: MeteredZone) : ParkingFlowState()
+
     data class DroppingPin(val carId: Long, val segment: StreetSegment, val originalPoint: LatLng) : ParkingFlowState()
 
     // Manual-picker escape hatch: instead of choosing from the distance-sorted list, the

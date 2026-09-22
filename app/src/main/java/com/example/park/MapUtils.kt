@@ -23,6 +23,7 @@ class CarPinMarker(mapView: MapView) : Marker(mapView)
 class SavedLocationMarker(mapView: MapView) : Marker(mapView)
 class CountdownLabelMarker(mapView: MapView) : Marker(mapView)
 class RppZoneLabelMarker(mapView: MapView) : Marker(mapView)
+class MeterBadgeMarker(mapView: MapView) : Marker(mapView)
 
 // The tap-feedback halo drawn under whichever segment was just tapped — see
 // showTappedSegmentHighlight. A distinct class (rather than reusing Polyline directly) so
@@ -41,10 +42,18 @@ private const val MAX_COUNTDOWN_LABELS = 30
 // matters more here.
 private const val MAX_RPP_ZONE_LABELS = 40
 
+// Same idea, for meter badges.
+private const val MAX_METER_BADGES = 40
+
 // A fixed violet, deliberately outside the SAFE/SOON/IMMINENT/ACTIVE palette (greens/yellows/
 // reds) and not user-configurable like those are — RPP status isn't a sweep-urgency signal, so
 // it shouldn't visually read as one.
 private val RPP_ZONE_LABEL_COLOR_INT = android.graphics.Color.parseColor("#8E24AA")
+
+// Distinct from both the sweep palette and the RPP violet above — metered is a third,
+// independent axis (a curb can be swept AND RPP-zoned AND metered all at once), so it needs
+// its own color rather than borrowing either.
+private val METER_BADGE_COLOR_INT = android.graphics.Color.parseColor("#00838F")
 
 // Keyed by a prefix ("car|"/"loc|") plus colorHex|icon|photoPath — styling rarely changes,
 // so repeated overlay refreshes (every debounced pan) reuse the same Bitmap instead of
@@ -671,6 +680,7 @@ suspend fun loadAndDrawSegments(
     statusColors: SweepStatusColors = SweepStatusColors(),
     showCountdownLabels: Boolean = false,
     showRppZoneLabels: Boolean = true,
+    showMeterBadges: Boolean = true,
     onSegmentClick: (StreetSegment) -> Unit = {}
 ): Int {
     val db = AppDatabase.getInstance(context)
@@ -695,6 +705,20 @@ suspend fun loadAndDrawSegments(
     mapView.overlays.removeAll { it is Polyline && it !is ParkedHighlightPolyline && it !is TappedSegmentHaloPolyline }
     mapView.overlays.removeAll { it is CountdownLabelMarker }
     mapView.overlays.removeAll { it is RppZoneLabelMarker }
+    mapView.overlays.removeAll { it is MeterBadgeMarker }
+
+    // Skips the query entirely when disabled in Settings, not just the drawing — no point
+    // fetching rows that'll never be shown.
+    val nearbyMeters = if (showMeterBadges) {
+        db.meteredZoneDao().getNearby(
+            minLat = centerPoint.latitude - radiusDegrees,
+            maxLat = centerPoint.latitude + radiusDegrees,
+            minLng = centerPoint.longitude - radiusDegrees,
+            maxLng = centerPoint.longitude + radiusDegrees
+        )
+    } else {
+        emptyList()
+    }
 
     // Skips the query entirely when disabled in Settings, not just the drawing — no point
     // fetching rows that'll never be shown.
@@ -861,6 +885,30 @@ suspend fun loadAndDrawSegments(
             }
     }
 
+    // Meter badges — independent of sweep/RPP status entirely: a curb can be swept AND
+    // RPP-zoned AND metered all at once (three separate axes, not a replacement status), so
+    // this layers on top rather than competing with the polyline color. Only shown for a
+    // confident, currently-enforced match (or one with unknown hours — see
+    // isMeterEnforcedOrUnknown), same reasoning as the RPP zone labels: a badge that never
+    // disappeared outside enforced hours would misrepresent a spot that's genuinely free right now.
+    run {
+        val centerLatLng = LatLng(centerPoint.latitude, centerPoint.longitude)
+        nearbyMeters
+            .filter { isMeterEnforcedOrUnknown(it, now) }
+            .map { zone -> zone to distanceMetersBetween(centerLatLng, LatLng(zone.lat, zone.lng)) }
+            .sortedBy { (_, distance) -> distance }
+            .take(MAX_METER_BADGES)
+            .forEach { (zone, _) ->
+                val badge = MeterBadgeMarker(mapView).apply {
+                    position = GeoPoint(zone.lat, zone.lng)
+                    icon = buildCountdownLabelIcon(context, "$ Metered", METER_BADGE_COLOR_INT)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setOnMarkerClickListener { _, _ -> false } // purely visual, same as the other labels
+                }
+                mapView.overlays.add(badge)
+            }
+    }
+
     mapView.invalidate()
     // Distinct curbs actually drawn near this viewport — used by MapScreen to tell "no DataSF
     // coverage here" (this is > 0 elsewhere but 0 for this pan) apart from "nothing's synced
@@ -898,12 +946,13 @@ suspend fun reloadSegmentsAndMarkers(
     statusColors: SweepStatusColors = SweepStatusColors(),
     showCountdownLabels: Boolean = false,
     showRppZoneLabels: Boolean = true,
+    showMeterBadges: Boolean = true,
     onSegmentClick: (StreetSegment) -> Unit = {},
     locationOverlay: MyLocationNewOverlay? = null
 ): Int {
     val nearbyCount = loadAndDrawSegments(
         mapView, context, centerPoint,
-        radiusDegrees, isPinDropActive, thresholds, statusColors, showCountdownLabels, showRppZoneLabels, onSegmentClick
+        radiusDegrees, isPinDropActive, thresholds, statusColors, showCountdownLabels, showRppZoneLabels, showMeterBadges, onSegmentClick
     )
     refreshParkedCarOverlays(mapView, context)
     refreshSavedLocationOverlays(mapView, context)
