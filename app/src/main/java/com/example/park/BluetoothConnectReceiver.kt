@@ -127,11 +127,24 @@ suspend fun performAutoDetectUnpark(context: Context, car: Car) {
 
     unsubscribeParking(context, car.id) // cancels reminders, clears parked_state, updates the widget
     BluetoothConnectionCenter.notifyParkedStateChanged()
-    showUnparkedNotification(context, car, SettingsRepository(context).informationalNotificationTimeoutMillis())
+    showUnparkedNotification(
+        context, car,
+        "Reconnected to its linked Bluetooth — cleared the saved parking spot.",
+        SettingsRepository(context).informationalNotificationTimeoutMillis()
+    )
     Log.d(BLUETOOTH_AUTO_DETECT_LOG_TAG, "[connect] performAutoDetectUnpark: cleared parked state, notification sent")
 }
 
-private fun showUnparkedNotification(context: Context, car: Car, timeoutAfterMillis: Long?) {
+/**
+ * Posts a quiet "car X unparked" notice whose tap opens MainActivity, instead of calling
+ * startActivity directly — a BroadcastReceiver-originated startActivity doesn't reliably bring
+ * the app to the foreground on modern Android (background-activity-launch restrictions apply
+ * even to work done via goAsync()), while a genuine notification tap always does. Not private:
+ * DismissReminderReceiver's "I moved my car" CLEAR_AND_OPEN_MAP behavior reuses this for the
+ * exact same situation (a car's parked state was just cleared in the background), passing its
+ * own [text] rather than this file's Bluetooth-specific wording.
+ */
+fun showUnparkedNotification(context: Context, car: Car, text: String, timeoutAfterMillis: Long?) {
     // Purely informational (no action needed, unlike the AMBIGUOUS/NO_MATCH park case) — if
     // the map screen is visible, its own live toast already said this, so skip the duplicate.
     if (MapScreenVisibility.isVisible.value) {
@@ -154,7 +167,7 @@ private fun showUnparkedNotification(context: Context, car: Car, timeoutAfterMil
     val builder = NotificationCompat.Builder(context, NotificationHelper.CHANNEL_ID_STATUS)
         .setSmallIcon(android.R.drawable.ic_dialog_alert)
         .setContentTitle("${car.name} unparked")
-        .setContentText("Reconnected to its linked Bluetooth \u2014 cleared the saved parking spot.")
+        .setContentText(text)
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setAutoCancel(true)
         .setContentIntent(pendingIntent)
