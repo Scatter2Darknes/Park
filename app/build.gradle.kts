@@ -22,6 +22,13 @@ android {
 
     buildTypes {
         release {
+            // TESTING ONLY: sign the release build with the default Android DEBUG keystore
+            // (~/.android/debug.keystore) so `assembleRelease` gives an APK that installs
+            // (an unsigned one fails with INSTALL_PARSE_FAILED_NO_CERTIFICATES) and the shrunk build can
+            // be tried on real devices. This is NOT a production key: anyone can sign an APK
+            // with it, and a store or an update over a properly signed install won't accept it.
+            // Replace with a real signing config before distributing anything.
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
                 // R8 SHRINK ONLY: removes unreachable code and resources, nothing else. The extra
                 // rules (-dontoptimize, -dontobfuscate so the on-device crash handler's stack
