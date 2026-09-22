@@ -562,6 +562,33 @@ fun MapScreen(
         previousIsFullySynced = isFullySynced
     }
 
+    // Every other reload trigger on this screen is pan/zoom/GPS-movement-driven — nothing
+    // previously redrew the map when a sync itself finished, so freshly-synced segments, RPP
+    // zones, or meter badges (a manual "Refresh Data Now" already reports e.g. "+N metered
+    // zones" in its status message) wouldn't actually show up until the next one of those
+    // happened to fire. Same isSyncBusy TRUE->FALSE transition SettingsScreen already watches
+    // to re-read lastRefreshMillis, just triggering a redraw here instead.
+    var previousIsSyncBusy by remember { mutableStateOf(isSyncBusy) }
+    LaunchedEffect(isSyncBusy) {
+        if (!isSyncBusy && previousIsSyncBusy) {
+            mapViewRef?.let { mv ->
+                nearbySegmentCount = reloadSegmentsAndMarkers(
+                    mv, context, mv.mapCenter as GeoPoint,
+                    radiusDegrees = segmentRadiusDegrees,
+                    isPinDropActive = { pinDropCallback != null },
+                    thresholds = sweepThresholds,
+                    statusColors = statusColors,
+                    showCountdownLabels = showImminentCountdown,
+                    showRppZoneLabels = showRppZoneLabels,
+                    showMeterBadges = showMeterBadges,
+                    onSegmentClick = ::handleSegmentTap,
+                    locationOverlay = locationOverlayRef
+                )
+            }
+        }
+        previousIsSyncBusy = isSyncBusy
+    }
+
     LaunchedEffect(Unit) {
         refreshActiveParkedCars()
     }
