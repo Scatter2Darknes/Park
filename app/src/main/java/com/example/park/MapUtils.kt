@@ -618,15 +618,19 @@ fun clearTappedSegmentHighlight(mapView: MapView) {
  * [text] in bold white on top. Sized to fit the text tightly rather than a fixed size, since
  * the text is deliberately short ("45m", "2h", "2d") — see formatShortCountdown.
  */
-private fun buildCountdownLabelIcon(context: Context, text: String, backgroundColorInt: Int): android.graphics.drawable.Drawable {
+// [compact] shrinks the text/padding a notch — used for the RPP zone label so it takes less
+// room than the sweep countdown labels while still showing its zone+time text (unlike the
+// meter badge, which drops text/buildCountdownLabelIcon entirely in favor of a small icon —
+// see buildMeterBadgeIcon — since there can be many more meters than RPP blocks in one view).
+private fun buildCountdownLabelIcon(context: Context, text: String, backgroundColorInt: Int, compact: Boolean = false): android.graphics.drawable.Drawable {
     val density = context.resources.displayMetrics.density
     val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
-        textSize = 11f * density
+        textSize = (if (compact) 9f else 11f) * density
         textAlign = android.graphics.Paint.Align.CENTER
         isFakeBoldText = true
     }
-    val paddingPx = 5f * density
+    val paddingPx = (if (compact) 3f else 5f) * density
     val textWidth = textPaint.measureText(text)
     val textHeight = textPaint.descent() - textPaint.ascent()
     val width = (textWidth + paddingPx * 2).toInt().coerceAtLeast(1)
@@ -647,6 +651,40 @@ private fun buildCountdownLabelIcon(context: Context, text: String, backgroundCo
 
     val textY = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
     canvas.drawText(text, width / 2f, textY, textPaint)
+
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+}
+
+/**
+ * A small filled circle with a "P" — deliberately just an icon, no text, unlike
+ * buildCountdownLabelIcon's pill: meters are spaced every ~20ft along a block, so a real block
+ * can have a dozen-plus badges in view at once, and a full "$ Metered" pill per one was
+ * cluttering the map. No per-meter time/limit text either (unlike the RPP zone label, which
+ * keeps its zone+countdown) — a glance at the map badge only needs to answer "is this block
+ * metered," not each individual post's exact numbers; the timer/limit detail already lives in
+ * the AskingForPin/AskingForMeterTimer flow once you've actually picked a spot.
+ */
+private fun buildMeterBadgeIcon(context: Context, colorInt: Int): android.graphics.drawable.Drawable {
+    val density = context.resources.displayMetrics.density
+    val diameterPx = (16f * density).toInt().coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(diameterPx, diameterPx, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val center = diameterPx / 2f
+
+    val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(center, center, center, bgPaint)
+
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 10f * density
+        textAlign = android.graphics.Paint.Align.CENTER
+        isFakeBoldText = true
+    }
+    val textY = center - (textPaint.descent() + textPaint.ascent()) / 2f
+    canvas.drawText("P", center, textY, textPaint)
 
     return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
 }
@@ -873,10 +911,15 @@ suspend fun loadAndDrawSegments(
                 val (regulation, midpoint, remainingMillis) = triple
                 val label = RppZoneLabelMarker(mapView).apply {
                     position = GeoPoint(midpoint.lat, midpoint.lng)
+                    // Compact, and without the redundant "RPP" word — the violet color already
+                    // reads as "this is the permit indicator" once meters have their own,
+                    // entirely different (icon-only) badge style, so it doesn't need spelling
+                    // out too. Still shows the zone letter(s) and remaining time.
                     icon = buildCountdownLabelIcon(
                         context,
-                        "RPP ${regulation.zoneLetterSet().sorted().joinToString("/")} ${formatShortCountdown(remainingMillis)}",
-                        RPP_ZONE_LABEL_COLOR_INT
+                        "${regulation.zoneLetterSet().sorted().joinToString("/")} · ${formatShortCountdown(remainingMillis)}",
+                        RPP_ZONE_LABEL_COLOR_INT,
+                        compact = true
                     )
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setOnMarkerClickListener { _, _ -> false } // purely visual, same as the countdown labels
@@ -901,7 +944,7 @@ suspend fun loadAndDrawSegments(
             .forEach { (zone, _) ->
                 val badge = MeterBadgeMarker(mapView).apply {
                     position = GeoPoint(zone.lat, zone.lng)
-                    icon = buildCountdownLabelIcon(context, "$ Metered", METER_BADGE_COLOR_INT)
+                    icon = buildMeterBadgeIcon(context, METER_BADGE_COLOR_INT)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setOnMarkerClickListener { _, _ -> false } // purely visual, same as the other labels
                 }

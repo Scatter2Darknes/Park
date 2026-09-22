@@ -50,6 +50,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -1263,17 +1266,32 @@ fun MapScreen(
 
                 extendMeterTimerCar?.let { car ->
                     var extraMinutesText by remember(car) { mutableStateOf("") }
+                    // true = add minutes onto the existing deadline (topped up the meter);
+                    // false = replace it with a fresh "N minutes from now" (re-typed a new
+                    // reading, or just wrong the first time).
+                    var addMode by remember(car) { mutableStateOf(true) }
                     AlertDialog(
                         onDismissRequest = { extendMeterTimerCar = null },
-                        title = { Text("Did you add more time?") },
+                        title = { Text("Update meter timer for ${car.car.name}") },
                         text = {
                             Column {
-                                Text("Added minutes at the meter for ${car.car.name}?")
-                                Spacer(modifier = Modifier.height(8.dp))
+                                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = addMode,
+                                        onClick = { addMode = true },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                                    ) { Text("Add minutes") }
+                                    SegmentedButton(
+                                        selected = !addMode,
+                                        onClick = { addMode = false },
+                                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                                    ) { Text("Set new time") }
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
                                 OutlinedTextField(
                                     value = extraMinutesText,
                                     onValueChange = { extraMinutesText = it.filter(Char::isDigit) },
-                                    label = { Text("Additional minutes") },
+                                    label = { Text(if (addMode) "Additional minutes" else "Minutes from now") },
                                     singleLine = true,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                                 )
@@ -1281,23 +1299,26 @@ fun MapScreen(
                         },
                         confirmButton = {
                             TextButton(onClick = {
-                                val extraMinutes = extraMinutesText.toIntOrNull()
-                                if (extraMinutes != null && extraMinutes > 0) {
+                                val minutes = extraMinutesText.toIntOrNull()
+                                if (minutes != null && minutes > 0) {
                                     scope.launch {
-                                        // Extends from whichever is later — the existing deadline,
-                                        // or now — so a timer that already lapsed before this got
-                                        // updated doesn't schedule the new one further in the past.
-                                        val base = maxOf(
-                                            car.parkedState?.meterTimerAtMillis ?: System.currentTimeMillis(),
-                                            System.currentTimeMillis()
-                                        )
-                                        val carName = car.car.name
-                                        scheduleMeterTimer(context, car.car.id, carName, "the meter", base + extraMinutes * 60_000L)
+                                        val now = System.currentTimeMillis()
+                                        // addMode extends from whichever is later — the existing
+                                        // deadline, or now — so a timer that already lapsed
+                                        // before this got updated doesn't schedule the new one
+                                        // further in the past. Setting a new time always counts
+                                        // from now instead, ignoring whatever was there before.
+                                        val base = if (addMode) {
+                                            maxOf(car.parkedState?.meterTimerAtMillis ?: now, now)
+                                        } else {
+                                            now
+                                        }
+                                        scheduleMeterTimer(context, car.car.id, car.car.name, "the meter", base + minutes * 60_000L)
                                         refreshActiveParkedCars()
                                     }
                                 }
                                 extendMeterTimerCar = null
-                            }) { Text("Add") }
+                            }) { Text(if (addMode) "Add" else "Set") }
                         },
                         dismissButton = {
                             TextButton(onClick = { extendMeterTimerCar = null }) { Text("Cancel") }
