@@ -94,6 +94,10 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
     fun handleDelete(location: SavedLocation) {
         scope.launch {
             AppDatabase.getInstance(context).savedLocationDao().delete(location)
+            // If this was safe-tagged, any car parked unmanaged because of it needs
+            // re-evaluating now that the location vouching for it is gone — see
+            // SavedLocationRecompute.kt's doc comment.
+            if (location.isSafeFromSweeping == true) reevaluateCarsFormerlySafeAt(context, location.id)
             reload()
             val result = snackbarHostState.showSnackbar(
                 message = "Deleted ${location.name}",
@@ -101,7 +105,13 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
                 duration = SnackbarDuration.Long
             )
             if (result == SnackbarResult.ActionPerformed) {
-                AppDatabase.getInstance(context).savedLocationDao().insert(location.copy(id = 0))
+                // Room's autoincrement hands this a NEW id — it's not literally the same row
+                // as before the delete, so treat it as a fresh "became safe" location rather
+                // than assuming the recompute above never happened.
+                val restoredId = AppDatabase.getInstance(context).savedLocationDao().insert(location.copy(id = 0))
+                if (location.isSafeFromSweeping == true) {
+                    convertCarsNowSafeAt(context, location.copy(id = restoredId))
+                }
                 reload()
             }
         }
@@ -233,12 +243,19 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
             location = location,
             onSave = { name, colorHex, iconEmoji, photoPath, isSafeFromSweeping ->
                 scope.launch {
-                    AppDatabase.getInstance(context).savedLocationDao().update(
-                        location.copy(
-                            name = name, colorHex = colorHex, iconEmoji = iconEmoji, photoPath = photoPath,
-                            isSafeFromSweeping = isSafeFromSweeping
-                        )
+                    val wasSafe = location.isSafeFromSweeping == true
+                    val updated = location.copy(
+                        name = name, colorHex = colorHex, iconEmoji = iconEmoji, photoPath = photoPath,
+                        isSafeFromSweeping = isSafeFromSweeping
                     )
+                    AppDatabase.getInstance(context).savedLocationDao().update(updated)
+                    // The location's lat/lng never change in this dialog, so a recompute is
+                    // only needed when the safe flag itself flipped — see
+                    // SavedLocationRecompute.kt's doc comment for what each direction does.
+                    when {
+                        wasSafe && !isSafeFromSweeping -> reevaluateCarsFormerlySafeAt(context, location.id)
+                        !wasSafe && isSafeFromSweeping -> convertCarsNowSafeAt(context, updated)
+                    }
                     customizingLocation = null
                     reload()
                 }

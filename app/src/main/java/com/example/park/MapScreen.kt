@@ -484,7 +484,7 @@ fun MapScreen(
     suspend fun resolveParkingFlow(carId: Long, point: LatLng): ParkingFlowState {
         val safeLocation = findSafeSavedLocation(context, point)
         if (safeLocation != null) {
-            saveUnmanagedParkedState(context, carId, point)
+            saveUnmanagedParkedState(context, carId, point, viaSafeLocationId = safeLocation.id)
             mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
             refreshActiveParkedCars()
             return ParkingFlowState.Hidden

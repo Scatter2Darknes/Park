@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -233,7 +233,13 @@ suspend fun saveUnmanagedParkedState(
     carId: Long,
     point: LatLng,
     exactPinLat: Double? = null,
-    exactPinLng: Double? = null
+    exactPinLng: Double? = null,
+    // Non-null only when this save is happening BECAUSE [point] matched a safe-tagged
+    // SavedLocation (see findSafeSavedLocation) — recorded so SavedLocationRecompute.kt can
+    // later find exactly this row if that location's safe flag changes or it's deleted. Left
+    // null for the manual "not a street cleaning risk spot" (NoStreetNearby) flow, which has
+    // nothing to do with any SavedLocation.
+    viaSafeLocationId: Long? = null
 ) {
     val db = AppDatabase.getInstance(context)
     val parkedAtMillis = System.currentTimeMillis()
@@ -257,7 +263,8 @@ suspend fun saveUnmanagedParkedState(
             parkedAtMillis = parkedAtMillis,
             nextSweepAtMillis = null,
             notificationScheduled = false, // updated below once RPP scheduling (if any) has run
-            rppRegulationId = rppRegulation?.objectId
+            rppRegulationId = rppRegulation?.objectId,
+            parkedViaSafeLocationId = viaSafeLocationId
         )
     )
 

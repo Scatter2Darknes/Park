@@ -41,6 +41,7 @@ suspend fun exportBackupJson(context: Context): String {
             put("name", loc.name)
             put("lat", loc.lat)
             put("lng", loc.lng)
+            put("isSafeFromSweeping", loc.isSafeFromSweeping == true)
         })
     }
 
@@ -123,7 +124,13 @@ suspend fun importBackupJson(context: Context, json: String): Result<Unit> = run
         for (i in 0 until locationsJson.length()) {
             val l = locationsJson.getJSONObject(i)
             db.savedLocationDao().insert(
-                SavedLocation(name = l.getString("name"), lat = l.getDouble("lat"), lng = l.getDouble("lng"))
+                SavedLocation(
+                    name = l.getString("name"), lat = l.getDouble("lat"), lng = l.getDouble("lng"),
+                    // optBoolean rather than getBoolean: a backup exported before this field
+                    // existed simply won't have the key, and "not marked safe" is the right
+                    // default for that case.
+                    isSafeFromSweeping = l.optBoolean("isSafeFromSweeping", false)
+                )
             )
         }
     }

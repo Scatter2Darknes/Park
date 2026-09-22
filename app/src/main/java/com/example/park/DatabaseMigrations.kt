@@ -171,9 +171,22 @@ val MIGRATION_15_16 = Migration(15, 16) { db ->
     db.execSQL("ALTER TABLE saved_location ADD COLUMN isSafeFromSweeping INTEGER")
 }
 
+/**
+ * v16 -> v17: adds parkedViaSafeLocationId to parked_state — set only when a row was saved
+ * unmanaged because it matched a safe-tagged SavedLocation (see ParkedState's doc comment on
+ * the field, and SavedLocationRecompute.kt). Nullable INTEGER with no default, same reasoning
+ * as every other additive column here. Existing rows get NULL, which is correct either way: an
+ * existing real managed park was never "via" a safe location, and an existing unmanaged row
+ * from before this column existed predates safe-location tracking entirely, so it's treated as
+ * a manual (NoStreetNearby) unmanaged park rather than retroactively guessed at.
+ */
+val MIGRATION_16_17 = Migration(16, 17) { db ->
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN parkedViaSafeLocationId INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
+    MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17
 )
 
 /*

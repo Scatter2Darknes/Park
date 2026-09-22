@@ -59,8 +59,9 @@ suspend fun proceedToMatching(context: android.content.Context, carId: Long, poi
 
 // Tighter than the 30m street-matching confidence radius: a false match here skips segment/RPP
 // matching entirely (see SavedLocation.isSafeFromSweeping), so this should only fire when the
-// point is essentially AT the saved location, not just generally nearby it.
-private const val SAFE_LOCATION_MATCH_RADIUS_METERS = 25.0
+// point is essentially AT the saved location, not just generally nearby it. Not private:
+// SavedLocationRecompute.kt reuses the exact same radius when a location's safe flag changes.
+const val SAFE_LOCATION_MATCH_RADIUS_METERS = 25.0
 
 /**
  * The closest safe-tagged Saved Location to [point], if one is within

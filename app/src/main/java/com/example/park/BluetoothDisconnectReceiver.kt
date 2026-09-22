@@ -323,7 +323,7 @@ suspend fun performAutoDetectPark(context: Context, car: Car): AutoParkResult {
     // ambiguous/no-match prompt ever appears for a spot the app already knows about.
     val safeLocation = findSafeSavedLocation(context, point)
     if (safeLocation != null) {
-        saveUnmanagedParkedState(context, car.id, point)
+        saveUnmanagedParkedState(context, car.id, point, viaSafeLocationId = safeLocation.id)
         BluetoothConnectionCenter.notifyParkedStateChanged()
         showAutoDetectNotification(
             context = context,
@@ -426,7 +426,13 @@ fun showAutoDetectNotification(
     informational: Boolean = false,
     // Removes the notification by itself after this long (NotificationCompat's setTimeoutAfter).
     // null or <= 0 = never. Reminders never pass one.
-    timeoutAfterMillis: Long? = null
+    timeoutAfterMillis: Long? = null,
+    // Which id slot this notification occupies — BLUETOOTH_AUTO_DETECT by default (this
+    // function's original and most common caller). SavedLocationRecompute.kt passes
+    // SAVED_LOCATION_RECOMPUTE instead, so a Settings-triggered "confirm this spot" notice
+    // can't silently overwrite (or be overwritten by) a live Bluetooth auto-detect prompt for
+    // the same car.
+    purpose: NotificationIds.Purpose = NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT
 ) {
     // Only the purely-informational CONFIDENT auto-park case opts into this — the
     // AMBIGUOUS/NO_MATCH "Did X just park?" notification is the only way to open the manual
@@ -450,7 +456,7 @@ fun showAutoDetectNotification(
             putExtra("autoDetectLng", autoDetectPoint.lng)
         }
     }
-    val notificationId = NotificationIds.forCar(car.id, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT)
+    val notificationId = NotificationIds.forCar(car.id, purpose)
     val pendingIntent = PendingIntent.getActivity(
         context,
         notificationId,
