@@ -1649,7 +1649,7 @@ fun MapScreen(
                 var customMinutesText by remember(state) { mutableStateOf("") }
 
                 suspend fun finishWithMeterTimer(minutes: Int?) {
-                    saveParkedState(context, state.carId, state.segment, state.point)
+                    saveParkedState(context, state.carId, state.segment, state.point, state.exactPin?.lat, state.exactPin?.lng)
                     if (minutes != null && minutes > 0) {
                         val carName = AppDatabase.getInstance(context).carDao().getAll()
                             .firstOrNull { it.id == state.carId }?.name ?: "Your car"
@@ -1700,14 +1700,28 @@ fun MapScreen(
                 LaunchedEffect(state) {
                     pinDropCallback = { tappedPoint ->
                         scope.launch {
-                            saveParkedState(
-                                context, state.carId, state.segment, state.originalPoint,
-                                tappedPoint.latitude, tappedPoint.longitude
-                            )
-                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                            refreshActiveParkedCars()
                             pinDropCallback = null
-                            parkingFlowState = ParkingFlowState.Hidden
+                            val droppedPoint = LatLng(tappedPoint.latitude, tappedPoint.longitude)
+                            // Re-checked against the DROPPED pin, not state.originalPoint —
+                            // this is exactly the case AskingForPin's own one-time meter check
+                            // (run against the original, possibly-imprecise GPS point before
+                            // this manual correction) can miss. Found: defer the actual save to
+                            // AskingForMeterTimer's own buttons (avoids saving twice); not
+                            // found: save immediately as before.
+                            val meter = findConfidentMeteredMatch(context, droppedPoint)
+                            if (meter != null) {
+                                parkingFlowState = ParkingFlowState.AskingForMeterTimer(
+                                    state.carId, state.segment, state.originalPoint, meter, exactPin = droppedPoint
+                                )
+                            } else {
+                                saveParkedState(
+                                    context, state.carId, state.segment, state.originalPoint,
+                                    tappedPoint.latitude, tappedPoint.longitude
+                                )
+                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+                                refreshActiveParkedCars()
+                                parkingFlowState = ParkingFlowState.Hidden
+                            }
                         }
                     }
                 }

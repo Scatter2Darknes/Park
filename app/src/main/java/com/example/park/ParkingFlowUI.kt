@@ -58,7 +58,16 @@ sealed class ParkingFlowState {
     // Offered as an extra option from AskingForPin when a confident, currently-enforced
     // MeteredZone match exists for the point — see MapScreen.kt. Not a MovedCarAction-style
     // auto-decision: the user types the actual deadline themselves (see MeterTimer.kt).
-    data class AskingForMeterTimer(val carId: Long, val segment: StreetSegment, val point: LatLng, val meter: MeteredZone) : ParkingFlowState()
+    // [exactPin], when non-null, is a manually-dropped pin (see DroppingPin) that must be
+    // preserved through to the eventual saveParkedState call — without it, confirming a timer
+    // here would silently save a highlight-only park and lose the pin the user just placed.
+    data class AskingForMeterTimer(
+        val carId: Long,
+        val segment: StreetSegment,
+        val point: LatLng,
+        val meter: MeteredZone,
+        val exactPin: LatLng? = null
+    ) : ParkingFlowState()
 
     data class DroppingPin(val carId: Long, val segment: StreetSegment, val originalPoint: LatLng) : ParkingFlowState()
 
