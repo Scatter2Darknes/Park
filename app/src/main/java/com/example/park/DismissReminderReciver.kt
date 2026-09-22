@@ -58,7 +58,12 @@ private suspend fun handleMovedCar(context: Context, carId: Long) {
     val db = AppDatabase.getInstance(context)
     val car = db.carDao().getAll().firstOrNull { it.id == carId }
     if (car == null) {
-        Log.w("Park", "DismissReminderReceiver: no car with id=$carId, aborting")
+        // Settings' "Test urgent"/"Test RPP urgent" buttons post a real notification under
+        // NotificationIds.TEST_CAR_ID, which deliberately isn't a real Car row (so a test tap
+        // can't touch real parked-state data) — tapping "I moved my car" on one of those can
+        // only ever land here. Test the actual behavior on a real parked car's reminder instead.
+        val note = if (carId == NotificationIds.TEST_CAR_ID) " (this is the Settings test-notification placeholder car, not a real one — test with a real parked car instead)" else ""
+        Log.w("Park", "DismissReminderReceiver: no car with id=$carId, aborting$note")
         return
     }
 
