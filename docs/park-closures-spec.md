@@ -14,8 +14,8 @@ where it plugs in, data model changes, and open implementation notes.
 > **Checked against the tree (2026-09-23, DB v19).** All of the names above exist. Notes:
 > `DataSfTrustConfig` is an `object` in `DataTrustConfig.kt`; `DebugControlReceiver` is debug-only
 > (`app/src/debug/`). Sections 1, 3, 4, 5, 6 and 8 below have been corrected where the code disagreed;
-> each correction is marked **(corrected)**. Items the owner still has to decide are marked
-> **Decision needed**.
+> each correction is marked **(corrected)**. The owner's decisions on the open items are marked
+> **Decided**.
 
 ---
 
@@ -185,7 +185,7 @@ If a finding contradicts an assumption below, stop and flag it rather than worki
   widget.
 - **(corrected) Timing.** Existing reminders fire a set number of *minutes* before the deadline
   (`notificationOffsetMinutes`, `urgentOffsetMinutes`). A 2-day heads-up is a different kind of
-  alert. **Decision needed**; recommended:
+  alert. **Decided (owner, 2026-09-23):**
   - an **advance alert** at the lead time (default 2 days, adjustable), on the normal channel, **plus**
   - the usual **normal + urgent reminders** at the existing offsets, so a tow gets at least the
     same last-minute nagging a sweep does.
@@ -201,16 +201,25 @@ If a finding contradicts an assumption below, stop and flag it rather than worki
 ### Saved locations **(corrected)**
 The original plan split "garage / off-street" (no tow warnings) from "on-street safe from sweeping"
 (still warned). **The data model has no such split.** `SavedLocation` only has
-`isSafeFromSweeping: Boolean?` (read it as `== true`). **Decision needed**; options:
+`isSafeFromSweeping: Boolean?` (read it as `== true`). **Decided (owner, 2026-09-23):** add an
+off-street flag.
 
-- **(Recommended) One rule for all safe locations: tow warnings still apply.** No schema change,
-  and it's the conservative choice. A garage will almost never match a tow zone anyway, because
-  tow zones are drawn on the street.
-- Add an `isOffStreet` flag to `saved_location` (Migration + backup/restore in `DataBackup.kt` +
-  a switch in `LocationStyleDialog`) and skip tow checks for those.
+- New nullable column `isOffStreet` on `saved_location`, added in the same v19 → v20 `Migration`.
+  `null` means "not off-street", so read it as `== true`, like `isSafeFromSweeping`.
+- **Default is off.** Every existing and new safe location keeps getting tow warnings until the
+  owner turns the flag on. That keeps the conservative default.
+- **Off-street on:** tow checks are skipped for cars parked there.
+- **Off-street off** (including on-street spots marked safe from sweeping): tow warnings apply.
+  Safe from sweeping ≠ safe from tows.
+- The flag **only affects tow zones.** Closure alerts still apply to off-street locations, because a
+  closed street can block a garage exit (see §4).
+- UI: a switch in `LocationStyleDialog` next to "safe from sweeping", included in
+  `DataBackup.kt` export/import, and a matching `onSave` parameter in `SavedLocationsScreen`.
+- Turning the flag on or off for a location with a car parked there re-runs that car's tow check.
+  Hook this into the existing edit path in `SavedLocationRecompute.kt`.
 
-Also unspecified in the original: **manual "not a street cleaning risk" parks**
-(`ParkingFlowState.NoStreetNearby`). Recommended: tow checks apply there too (same lat/lng match).
+**Manual "not a street cleaning risk" parks** (`ParkingFlowState.NoStreetNearby`), which the
+original didn't cover: **Decided**, tow checks apply there too (same lat/lng match).
 
 ---
 
@@ -301,7 +310,8 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
   - park-time fallback when offline (must not report "clear"),
   - tow reminders re-armed by `armParkedState` (reboot/force-stop path), and tow delivery markers
     reset on re-park,
-  - Room migration v19 → v20 (new tables and `parked_state` columns).
+  - Room migration v19 → v20 (new tables, `parked_state` columns, `saved_location.isOffStreet`),
+  - off-street flag: skips tow checks when on, never skips closure alerts, and `null` behaves as off.
 - Device checks on the usual fleet, including the pre-API-30 path on the S9.
 - Verify Tier 1 behaves identically to today with park-time fetch toggled off.
 
@@ -319,7 +329,8 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
 ## 8. Build order
 
 1. Step 0 inspection + `socrata_publish_times.py` + first-seen logging.
-2. Resolve the **Decision needed** items (tow alert timing, saved-location tow rule).
+2. ~~Resolve the open decisions~~ Done 2026-09-23 (tow timing in §3 Alerts, off-street flag in
+   §3 Saved locations).
 3. Tier settings + one-time offer.
 4. Tow Zones: sync → storage → matching → park-time fetch (WorkManager) → tow reminder family in
    `armParkedState` + `soonestDeadline()`. **(corrected)** Replaces the old step 2
