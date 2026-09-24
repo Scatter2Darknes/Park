@@ -341,3 +341,72 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
 5. Tier 2 background worker.
 6. Overlap test.
 7. Street Closures: sync → blocked-in/nearby → merge rule → map layer.
+
+---
+
+## 9. Findings (Step 0, 2026-09-23)
+
+Pulled from `https://data.sf.gov/resource/<id>.json` at ~21:00 PDT (citywide, no location filter).
+Raw downloads were kept in a scratch folder outside the repo and not committed. Note the host is
+`data.sf.gov`; `data.sfgov.org` only returns an HTML redirect page.
+
+### Tow Zones `6r5h-j298` ("SFMTA - Enforced Temporary Tow Zones")
+
+**⚠ Blocker: the feed appears stale upstream.** DataSF re-publishes it daily (`rowsUpdatedAt` =
+2026-09-23 20:54), but the newest row was **entered 2026-07-18** (`max(datetimeentered)`,
+`max(datetimeposted)` = 07-17). Monthly entries in 2026: Jan 799, Apr 1,493, Jun 657, Jul 413
+(through the 18th), then **none**. Median lead time is ~4 days, so a working feed should hold
+permits entered in the last few weeks. **Only 6 real permits are active or upcoming right now**
+(plus one junk row dated 2043–2046). Until SFMTA fixes this, a tow warning would almost never fire,
+and the app must not treat "no tow zone found" as "clear". Needs an owner decision (see
+the §8 note below) before Phase A is built.
+
+Other findings, from the 15,851 rows entered since 2025-01-01:
+
+| Question | Finding |
+|---|---|
+| Row count | **172,269**, not "small". It holds history back to 2005 (`status` blank on 154,582 rows; `Approved` 16,987; `Installed` 700). Sync must filter server-side by time (`enddate >= today`), which is still citywide and reveals no location. The prune guard's server total must use the same filter. |
+| Geometry | **None usable.** `location` is always empty; `latitude/longitude` on 15% of rows only. |
+| `cnn` | Present on 99.9%. **33% of rows list several CNNs**, comma-separated (`"5668000,5667000,5666000"`). Same format as the sweep dataset's `cnn`. |
+| Side of street | `sideofstreet` is **always empty**. Match by `cnn` only and treat the zone as covering **both sides** (conservative). |
+| Extent within the block | `streetfrontagefeet` (e.g. 140 of a block), `address` range, from/to streets. Too coarse to place on one part of the block: treat as the whole block. |
+| Time fields | `startdate`/`enddate` are dates (time `00:00`); `starttime`/`endtime` are text like `7:00 AM` / `11:59 PM`. So a zone is **daily hours over a date range**, local SF time. |
+| Days of week | Free text in `notes`: `Monday - Friday` (43%), `Monday - Sunday`, `Monday - Saturday`, single days, comma lists (`Monday,Tuesday`). 3% blank. Parse it, and when it can't be parsed treat the zone as **every day**. |
+| 24-hour flag | `_24hourenforcement` Yes/No (29% Yes); Yes rows use `12:00 AM`–`11:59 PM`. |
+| IDs | `casenumber` always present (15,740 distinct; up to 15 rows per case). `permitnumber` on 63%. Use `casenumber` + row as the key. |
+| Lead time (start − entered) | p5 2.1 d, p25 3.2 d, **median 4.3 d**, p95 14.3 d. 3% under 2 days, 1.6% under 1 day. **The 2-day default fits**; the late-permit "alert immediately" rule matters for ~3%. |
+| Duration | Median 19 days, p90 32 days. |
+| Categories | `category` and `signtype` mostly blank recently; `source` Web / Verbal. Not useful for filtering. |
+
+### Street Closures `8x25-yybr` ("Temporary Street Closures")
+
+| Question | Finding |
+|---|---|
+| Row count | **4,628** rows, 429 cases. Small, as expected. 4,337 end in the future; 350 start within 7 days. |
+| Freshness | Looks live: `data_loaded_at` today, rows start from 2026-09-14. Some rows already ended (lag of ~a week), so time-pruning is needed. `data_as_of` is always null. |
+| Status | **Not only "Permitted"**, despite the column description: Permitted 4,283, In Review 216, Submitted 92, Pending Payment 29, etc. **Filter to `Permitted`.** |
+| Geometry | `shape` is a **LineString** on every row (street centerline between two intersections). |
+| `cnn` | On every row, **exactly one** per row. Matches the sweep `cnn` format. |
+| Side / direction | `direction` is `undefined` / `unknown` / `both`: no per-side info. A closure closes the block. |
+| Full vs partial | **Yes: `veh_imp`** (WZDx VehicleImpact): `all-lanes-closed` 94%, `some-lanes-closed` 6%, `all-lanes-open` 0.4%. Only `all-lanes-closed` produces `BlockedIn`; the other two become `Nearby` at most. |
+| Time fields | `start_dt`/`end_dt` local SF time, plus `start_utc`/`end_utc` (always 7 or 8 h apart, so DST is handled). **Use the `_utc` fields.** |
+| Windows | Median 13 h. 325 rows span several days. 165 of those don't run midnight-to-midnight (e.g. Fri 16:00 → Mon 06:00, or a year-long Shared Space 10:00 → 23:59), and the feed can't say whether that is continuous or daily. **Treat `start → end` as continuous** (it over-warns, never under-warns). |
+| Recurring | **Expanded into one row per occurrence**: e.g. a Shared Space case has 326 rows for one CNN, one per day. No recurrence rule to parse. |
+| Types | Roadway Shared Spaces 3,143 (car-free streets, mostly permanent-ish), Special Event 1,226, Special Traffic Permit 259 (construction; `info` free text). |
+| Precision caveat | `start/end` can be wider than the real work: a PG&E row says 00:00–23:59 while its `info` says 8 am–5 pm. Fine for "blocked in" (conservative). |
+
+### Overlap between the feeds
+The tow feed has 527 rows with `source = "Street Closure Case"`, so SFMTA does link some closures to
+tow zones. A real overlap test can't run while the tow feed is stale (its active set is 6 rows).
+Deferred until the tow feed is current again.
+
+### What changes in the plan
+- **Tow Zones:** blocked on the stale feed (owner decision). If built anyway: time-filtered
+  sync, `cnn`-list matching (split on commas), whole block both sides, daily hours + parsed days,
+  and the park-time result must say "tow data may be out of date" when the newest entry is
+  more than a few days old. A freshness check on `max(datetimeentered)` is cheap and should gate
+  any "no tow zones" wording.
+- **Street Closures:** everything the spec needs is there. Filter `status = Permitted`, use
+  `veh_imp` for full vs partial, `cnn` for confident matches and the LineString for "nearby"
+  distance and the map layer.
+- **Build order:** consider building **Street Closures first**, since that feed is live.
