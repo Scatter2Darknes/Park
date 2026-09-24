@@ -144,6 +144,7 @@ fun SettingsScreen(
     var closuresLastSyncMillis by remember { mutableStateOf<Long?>(null) }
     var closureCheckRunning by remember { mutableStateOf(false) }
     var closureCheckMessage by remember { mutableStateOf<String?>(null) }
+    var showClosuresLayer by remember { mutableStateOf(SettingsDefaults.SHOW_CLOSURES_LAYER) }
 
     suspend fun reloadAllSettings() {
         alwaysAskCar = settings.alwaysAskCar.first()
@@ -181,6 +182,7 @@ fun SettingsScreen(
         closureBackgroundSync = settings.closureBackgroundSync.first()
         closureAlertLeadHours = settings.closureAlertLeadHours.first()
         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
+        showClosuresLayer = settings.showClosuresLayer.first()
     }
 
     LaunchedEffect(Unit) {
@@ -936,6 +938,37 @@ fun SettingsScreen(
                 onCheckedChange = { checked ->
                     showMeterBadges = checked
                     scope.launch { settings.setShowMeterBadges(checked) }
+                }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Show street closures", style = MaterialTheme.typography.labelMedium)
+                if (!closureBackgroundSync) {
+                    Text(
+                        "Needs “Keep checking in the background” in Data & Sync, so the map is never " +
+                                "drawn from old data. Closures affecting your parked car are shown either way.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                DescriptionToggle(
+                    "Upcoming street closures for the next week, as orange-and-black dashed lines " +
+                            "with a 🚧 badge you can tap for the times. A closure is not a ticket " +
+                            "risk; it can mean you can't drive through, or out, while it's on."
+                )
+            }
+            Switch(
+                checked = showClosuresLayer && closureBackgroundSync,
+                enabled = closureBackgroundSync,
+                onCheckedChange = { checked ->
+                    showClosuresLayer = checked
+                    scope.launch { settings.setShowClosuresLayer(checked) }
                 }
             )
         }

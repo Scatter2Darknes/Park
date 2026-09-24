@@ -357,6 +357,8 @@ fun MapScreen(
     var showImminentCountdown by remember { mutableStateOf(SettingsDefaults.SHOW_IMMINENT_COUNTDOWN) }
     var showRppZoneLabels by remember { mutableStateOf(SettingsDefaults.SHOW_RPP_ZONE_LABELS) }
     var showMeterBadges by remember { mutableStateOf(SettingsDefaults.SHOW_METER_BADGES) }
+    // The citywide closures layer is on (its switch AND Tier 2): shows the "Closures through …" label.
+    var closureMapLayerOn by remember { mutableStateOf(false) }
     // "CAUTIOUS" (default) keeps the original two-dialog confirm-then-pin flow; "SIMPLE"
     // collapses it into QuickParkConfirmDialog for someone who's decided they'd rather trade
     // that extra checkpoint for fewer taps. See ParkingNotificationsSection in SettingsScreen.
@@ -394,6 +396,7 @@ fun MapScreen(
         showImminentCountdown = SettingsRepository(context).showImminentCountdown.first()
         showRppZoneLabels = SettingsRepository(context).showRppZoneLabels.first()
         showMeterBadges = SettingsRepository(context).showMeterBadges.first()
+        closureMapLayerOn = SettingsRepository(context).closureMapLayerOn()
         tunnelAutoDimEnabled = SettingsRepository(context).tunnelAutoDimEnabled.first()
         parkingConfirmationStyle = SettingsRepository(context).parkingConfirmationStyle.first()
         // The map (below) isn't created until this flips true. Without this gate, the
@@ -460,6 +463,21 @@ fun MapScreen(
         } else {
             selectedSegment = seg
         }
+    }
+
+    // A tapped 🚧 closure badge (see drawClosureOverlays): its block's closures, shown in a dialog.
+    var tappedClosureBlock by remember { mutableStateOf<ClosureBlock?>(null) }
+    fun handleClosureTap(block: ClosureBlock) {
+        if (drivingModeActive) return // same rule as segment taps
+        if (parkingFlowState != ParkingFlowState.Hidden) return // mid-park, taps belong to the parking flow
+        tappedClosureBlock = block
+    }
+
+    /** Tapping the banner's closure line: centre the map on that closure (a no-op for "check unavailable"). */
+    fun centerMapOnClosure(status: ClosureStatus?) {
+        val points = (status as? ClosureStatus.Affected)?.hit?.closure?.points?.takeIf { it.size >= 2 } ?: return
+        val mid = midpointAlongPath(points)
+        mapViewRef?.controller?.animateTo(GeoPoint(mid.lat, mid.lng))
     }
 
     // Only meaningful while actively driving with frequent fixes expected — outside driving
@@ -628,7 +646,7 @@ fun MapScreen(
                     showCountdownLabels = showImminentCountdown,
                     showRppZoneLabels = showRppZoneLabels,
                     showMeterBadges = showMeterBadges,
-                    onSegmentClick = ::handleSegmentTap,
+                    onSegmentClick = ::handleSegmentTap, onClosureClick = ::handleClosureTap,
                     locationOverlay = locationOverlayRef
                 )
             }
@@ -650,7 +668,16 @@ fun MapScreen(
     LaunchedEffect(parkedStateVersion) {
         if (parkedStateVersion != 0L) {
             refreshActiveParkedCars()
-            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context, locationOverlayRef) }
+            mapViewRef?.let { mv ->
+                // Closures too: this also fires when a park-time closure check finishes, which is
+                // when the parked car's closure (and fresher layer data) first becomes known.
+                refreshClosureOverlays(
+                    mv, context, segmentRadiusDegrees,
+                    isPinDropActive = { pinDropCallback != null },
+                    onClosureClick = ::handleClosureTap,
+                    locationOverlay = locationOverlayRef
+                )
+            }
         }
     }
 
@@ -787,7 +814,7 @@ fun MapScreen(
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
                                 showMeterBadges = showMeterBadges,
-                                onSegmentClick = ::handleSegmentTap,
+                                onSegmentClick = ::handleSegmentTap, onClosureClick = ::handleClosureTap,
                                 locationOverlay = locationOverlayRef
                             )
                         }
@@ -880,7 +907,7 @@ fun MapScreen(
                                         showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
                                 showMeterBadges = showMeterBadges,
-                                        onSegmentClick = ::handleSegmentTap,
+                                        onSegmentClick = ::handleSegmentTap, onClosureClick = ::handleClosureTap,
                                         locationOverlay = locationOverlayRef
                                     )
                                 }
@@ -906,7 +933,7 @@ fun MapScreen(
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
                                 showMeterBadges = showMeterBadges,
-                                onSegmentClick = ::handleSegmentTap,
+                                onSegmentClick = ::handleSegmentTap, onClosureClick = ::handleClosureTap,
                                 locationOverlay = locationOverlay
                             )
                         }
@@ -1275,7 +1302,9 @@ fun MapScreen(
                                         Text(
                                             if (c.car.id == mostUrgent.car.id) line else "${c.car.name}: $line",
                                             style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.padding(top = 4.dp)
+                                            modifier = Modifier
+                                                .padding(top = 4.dp)
+                                                .clickable { centerMapOnClosure(c.closureStatus) }
                                         )
                                     }
                             }
@@ -1329,7 +1358,14 @@ fun MapScreen(
                                             Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
                                             Text(itemNextText, style = MaterialTheme.typography.bodySmall, color = itemTextColor)
                                             closureBannerText(item.closureStatus, now)?.let {
-                                                Text(it, style = MaterialTheme.typography.bodySmall)
+                                                Text(
+                                                    it,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    modifier = Modifier.clickable {
+                                                        centerMapOnClosure(item.closureStatus)
+                                                        parkedBannerExpanded = false
+                                                    }
+                                                )
                                             }
                                         }
                                         Text(
@@ -1594,7 +1630,7 @@ fun MapScreen(
                                 showCountdownLabels = showImminentCountdown,
                                 showRppZoneLabels = showRppZoneLabels,
                                 showMeterBadges = showMeterBadges,
-                                onSegmentClick = ::handleSegmentTap,
+                                onSegmentClick = ::handleSegmentTap, onClosureClick = ::handleClosureTap,
                                 locationOverlay = locationOverlayRef
                             )
                         }
@@ -1685,6 +1721,51 @@ fun MapScreen(
             LaunchedEffect(Unit) {
                 SettingsRepository(context).setClosureTier2OfferShown()
                 android.util.Log.d("ClosureAlert", "Tier 2 offer shown (recorded; it won't appear again)")
+            }
+        }
+        tappedClosureBlock?.let { block ->
+            val now = System.currentTimeMillis()
+            AlertDialog(
+                onDismissRequest = { tappedClosureBlock = null },
+                title = { Text("🚧 Street closure") },
+                text = {
+                    Column {
+                        closureDetailLines(block, now).forEachIndexed { i, line ->
+                            Text(
+                                line,
+                                style = if (i == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (i == 0) FontWeight.Bold else null
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (block.affectsParkedCar) "This one affects where your car is parked. A closure isn't a ticket " +
+                                    "risk, but you may not be able to drive out while it's on."
+                            else "Not a ticket risk: it can mean you can't drive through, or out, while it's on.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = { TextButton(onClick = { tappedClosureBlock = null }) { Text("Close") } }
+            )
+        }
+        // The layer's horizon, so an empty map reads as "none this week", not "none ever" (spec §4).
+        if (closureMapLayerOn && parkingFlowState == ParkingFlowState.Hidden) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 12.dp, bottom = 96.dp),
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.92f),
+                shadowElevation = 2.dp
+            ) {
+                Text(
+                    "🚧 " + closureHorizonLabel(System.currentTimeMillis()),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                )
             }
         }
         ClosureOfferCard(
@@ -2071,7 +2152,8 @@ private fun BoxScope.ClosureOfferCard(visible: Boolean, summary: String, onTurnO
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Park can keep checking in the background (every $CLOSURE_BACKGROUND_SYNC_HOURS h), so a " +
-                            "closure permitted after you park still reaches you. Your location is never sent. " +
+                            "closure permitted after you park still reaches you, and the week's closures show " +
+                            "on the map. Your location is never sent. " +
                             "Change it anytime in Settings → Data & Sync.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onTertiaryContainer
