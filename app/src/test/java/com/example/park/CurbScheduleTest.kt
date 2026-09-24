@@ -132,6 +132,43 @@ class CurbScheduleTest {
         assertEquals("thu", CurbSchedule.pickByUrgency(listOf(hol, real, urgent), { it.seg }, { it.status }).seg.blockSweepId)
     }
 
+    // ---- the block details sheet: the whole curb, not the tapped row ----
+
+    @Test
+    fun sweepsOn_marksEveryRowsDays_notJustTheTappedOne() {
+        val curb = listOf(row("mon", "Monday"), row("thu", "Thursday"))
+        assertTrue(CurbSchedule.sweepsOn(curb, java.time.LocalDate.of(2026, 4, 13)))  // Monday
+        assertTrue(CurbSchedule.sweepsOn(curb, java.time.LocalDate.of(2026, 4, 16)))  // Thursday: hidden before
+        assertTrue(!CurbSchedule.sweepsOn(curb, java.time.LocalDate.of(2026, 4, 15))) // Wednesday
+    }
+
+    @Test
+    fun sweepsOn_respectsTheWeekOfTheMonth() {
+        val firstAndThird = sweepSegment(fullName = "Monday", fromHour = 8, toHour = 10,
+            weeks = booleanArrayOf(true, false, true, false, false)).copy(blockSweepId = "m13", cnn = "123")
+        assertTrue(CurbSchedule.sweepsOn(listOf(firstAndThird), java.time.LocalDate.of(2026, 4, 6)))   // 1st Monday
+        assertTrue(!CurbSchedule.sweepsOn(listOf(firstAndThird), java.time.LocalDate.of(2026, 4, 13))) // 2nd Monday
+        assertEquals("1st & 3rd", CurbSchedule.weeksLabel(firstAndThird))
+        assertEquals("", CurbSchedule.weeksLabel(row("m", "Monday")))
+    }
+
+    @Test
+    fun aHoliday_isASkip_notASweep() {
+        val thursday = listOf(row("thu", "Thursday"))
+        val thanksgiving = java.time.LocalDate.of(2026, 11, 26)
+        assertTrue(!CurbSchedule.sweepsOn(thursday, thanksgiving))
+        assertTrue(CurbSchedule.holidaySkipOn(thursday, thanksgiving))
+        assertEquals("thu", CurbSchedule.holidaySkipRow(thursday, thanksgiving)?.blockSweepId)
+        // An ordinary Thursday is neither a skip nor missing.
+        assertTrue(!CurbSchedule.holidaySkipOn(thursday, java.time.LocalDate.of(2026, 11, 19)))
+    }
+
+    @Test
+    fun scheduleRows_oneLinePerDistinctSchedule_inWeekdayOrder_withoutTheHolidayRow() {
+        val rows = listOf(row("thu", "Thursday"), row("hol", "HOLIDAY", 2, 6), row("mon", "Monday"), row("mon2", "Monday"))
+        assertEquals(listOf("mon", "thu"), CurbSchedule.scheduleRows(rows).map { it.blockSweepId })
+    }
+
     @Test
     fun curbKey_isCnnPlusSide() {
         assertEquals("123|R", CurbSchedule.curbKey(row("x", "Monday")))

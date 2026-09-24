@@ -67,6 +67,48 @@ object CurbSchedule {
             }
             .sortedBy { it.distanceMeters }
 
+    /** Whether [row]'s weekday and week-of-month pattern fall on [date], ignoring holidays. */
+    private fun rowFallsOn(row: StreetSegment, date: java.time.LocalDate): Boolean {
+        val day = NextSweepCalculator.dayOfWeekFromName(row.fullName) ?: return false
+        val occurrence = (date.dayOfMonth - 1) / 7 // 0 = 1st week of the month ... 4 = 5th
+        val weeks = listOf(row.week1, row.week2, row.week3, row.week4, row.week5)
+        return date.dayOfWeek == day && weeks[occurrence]
+    }
+
+    /** Whether ANY row of the curb sweeps on [date] (a holiday suspension is judged per row, as each row's own rule). */
+    fun sweepsOn(rows: List<StreetSegment>, date: java.time.LocalDate): Boolean =
+        rows.any { rowFallsOn(it, date) && !SfHolidayCalendar.isSuspended(date, it) }
+
+    /** A would-be sweep day that is off for a holiday on every row that would sweep it — the calendar's hollow circle. */
+    fun holidaySkipOn(rows: List<StreetSegment>, date: java.time.LocalDate): Boolean =
+        !sweepsOn(rows, date) && rows.any { rowFallsOn(it, date) }
+
+    /** The row whose holiday names [date]'s skip, for the "No cleaning ... — Thanksgiving" line. */
+    fun holidaySkipRow(rows: List<StreetSegment>, date: java.time.LocalDate): StreetSegment? =
+        rows.firstOrNull { rowFallsOn(it, date) && SfHolidayCalendar.isSuspended(date, it) }
+
+    /**
+     * The rows worth listing as the curb's schedule, one per distinct weekday + hours + weeks, in weekday
+     * order. "HOLIDAY" rows (no weekday) are left out: they add no sweep day of their own.
+     */
+    fun scheduleRows(rows: List<StreetSegment>): List<StreetSegment> =
+        rows.filter { NextSweepCalculator.dayOfWeekFromName(it.fullName) != null }
+            .distinctBy { listOf(it.fullName, it.fromHour, it.toHour, it.week1, it.week2, it.week3, it.week4, it.week5) }
+            .sortedWith(compareBy({ NextSweepCalculator.dayOfWeekFromName(it.fullName)!!.value }, { it.fromHour }))
+
+    /** "" when swept every week, else which weeks of the month, e.g. "1st & 3rd". */
+    fun weeksLabel(row: StreetSegment): String {
+        val names = listOf("1st", "2nd", "3rd", "4th", "5th")
+        val flags = listOf(row.week1, row.week2, row.week3, row.week4, row.week5)
+        if (flags.all { it }) return ""
+        val on = names.filterIndexed { i, _ -> flags[i] }
+        return when (on.size) {
+            0 -> "no weeks"
+            1 -> on[0]
+            else -> on.dropLast(1).joinToString(", ") + " & " + on.last()
+        }
+    }
+
     /**
      * Among rows with the same urgency (e.g. all SAFE) prefer a real weekday row over an unparseable one; used by the
      * map's per-curb de-duplication so a tap never lands on a "HOLIDAY" row that says "no upcoming cleaning" for a curb

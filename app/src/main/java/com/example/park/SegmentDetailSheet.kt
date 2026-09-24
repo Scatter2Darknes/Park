@@ -38,11 +38,18 @@ fun SegmentDetailSheet(
     var existingOverride by remember { mutableStateOf<ScheduleOverride?>(null) }
     var showOverrideDialog by remember { mutableStateOf(false) }
     var rppRegulation by remember { mutableStateOf<RppZoneRegulation?>(null) }
+    // Every row of this CURB (see CurbSchedule): DataSF often splits one curb into a row per sweep day, and
+    // showing only the tapped row hid the other days — e.g. "Mondays" on a curb also swept Thursdays. The
+    // reminders already use every row; this makes the sheet agree with them. Starts as just the tapped row
+    // until the database answers.
+    var curbRows by remember { mutableStateOf(listOf(segment)) }
 
     LaunchedEffect(segment.blockSweepId) {
         existingOverride = AppDatabase.getInstance(context).scheduleOverrideDao().getById(segment.blockSweepId)
         rppRegulation = findConfidentRppMatch(context, LatLng(segment.centroidLat, segment.centroidLng))
+        curbRows = loadCurbRows(context, segment)
     }
+    val scheduleRows = CurbSchedule.scheduleRows(curbRows).ifEmpty { listOf(segment) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -63,9 +70,21 @@ fun SegmentDetailSheet(
                     BlockSideCompass(degrees = compassDegrees)
                 }
                 Text(
-                    text = "  ${segment.blockSide} side \u00b7 ${segment.fullName}s ${formatHour(segment.fromHour)}\u2013${formatHour(segment.toHour)}",
+                    text = "  ${segment.blockSide} side" +
+                            if (scheduleRows.size == 1) " \u00b7 ${scheduleLine(scheduleRows[0])}" else "",
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+            // Several schedules on one curb: one line each, so no sweep day is hidden.
+            if (scheduleRows.size > 1) {
+                Text(
+                    "Swept on ${scheduleRows.size} schedules:",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                scheduleRows.forEach { row ->
+                    Text("  \u2022 ${scheduleLine(row)}", style = MaterialTheme.typography.bodySmall)
+                }
             }
             if (existingOverride != null) {
                 Text(
@@ -77,7 +96,7 @@ fun SegmentDetailSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            val next = NextSweepCalculator.nextSweepDateTime(segment)
+            val next = CurbSchedule.nextSweepDateTime(curbRows) // the soonest across the whole curb, like the reminders
             if (next != null) {
                 val daysUntil = ChronoUnit.DAYS.between(sfNow().toLocalDate(), next.toLocalDate())
                 val label = when {
@@ -96,13 +115,22 @@ fun SegmentDetailSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            SweepCalendarGrid(segment = segment, weeksToShow = 4)
+            SweepCalendarGrid(rows = curbRows, weeksToShow = 4)
 
             rppRegulation?.let { regulation -> RppZoneSection(regulation = regulation, activeCar = activeCar) }
 
             Spacer(modifier = Modifier.height(16.dp))
             TextButton(onClick = { showOverrideDialog = true }) {
                 Text(if (existingOverride != null) "Edit correction" else "Doesn't match the sign? Fix it")
+            }
+            // A correction is saved per row, so with several schedules say which one this edits.
+            if (scheduleRows.size > 1) {
+                Text(
+                    "This fixes the ${segment.fullName}s schedule. To fix another day, tap the street again " +
+                            "near that sign.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -172,28 +200,29 @@ private fun BlockSideCompass(degrees: Double, modifier: Modifier = Modifier) {
     }
 }
 
+/** "Mondays 8 AM–10 AM" plus the weeks when not every week, e.g. "Mondays 8 AM–10 AM (1st & 3rd)". */
+private fun scheduleLine(row: StreetSegment): String {
+    val weeks = CurbSchedule.weeksLabel(row)
+    return "${row.fullName}s ${formatHour(row.fromHour)}–${formatHour(row.toHour)}" + if (weeks.isEmpty()) "" else " ($weeks)"
+}
+
+/** Four weeks of the CURB's sweep days: a day is red when any of its rows sweeps then (see CurbSchedule.sweepsOn). */
 @Composable
-private fun SweepCalendarGrid(segment: StreetSegment, weeksToShow: Int) {
+private fun SweepCalendarGrid(rows: List<StreetSegment>, weeksToShow: Int) {
     val today = sfNow().toLocalDate()
     val daysFromSunday = today.dayOfWeek.value % 7 // Mon=1...Sun=7, so Sunday becomes 0
     val startOfWeek = today.minusDays(daysFromSunday.toLong())
 
-    val targetDay = NextSweepCalculator.dayOfWeekFromName(segment.fullName)
-    val weekFlags = listOf(segment.week1, segment.week2, segment.week3, segment.week4, segment.week5)
-
     // Nearest holiday within the visible range that would otherwise have been a cleaning day —
     // called out explicitly since a suppressed date silently missing its usual red dot is easy
     // to misread as "the schedule glitched" rather than "no cleaning today, it's a holiday."
-    val upcomingHolidaySkip = remember(segment.blockSweepId) {
+    val upcomingHolidaySkip = remember(rows) {
         (0 until weeksToShow * 7L)
             .asSequence()
             .map { today.plusDays(it) }
-            .firstOrNull { date ->
-                targetDay != null && date.dayOfWeek == targetDay &&
-                        weekFlags[((date.dayOfMonth - 1) / 7)] &&
-                        SfHolidayCalendar.isSuspended(date, segment)
-            }
-            ?.let { date -> date to SfHolidayCalendar.holidayName(date, segment)!! }
+            .firstOrNull { date -> CurbSchedule.holidaySkipOn(rows, date) }
+            ?.let { date -> CurbSchedule.holidaySkipRow(rows, date)?.let { row -> date to SfHolidayCalendar.holidayName(date, row) } }
+            ?.let { (date, name) -> name?.let { date to it } }
     }
 
     Column {
@@ -210,11 +239,8 @@ private fun SweepCalendarGrid(segment: StreetSegment, weeksToShow: Int) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 for (dayOffset in 0 until 7) {
                     val date = startOfWeek.plusDays((week * 7 + dayOffset).toLong())
-                    val occurrence = ((date.dayOfMonth - 1) / 7) + 1
-                    val wouldBeSweepDay = targetDay != null && date.dayOfWeek == targetDay &&
-                            occurrence in 1..5 && weekFlags[occurrence - 1]
-                    val isHolidaySkip = wouldBeSweepDay && SfHolidayCalendar.isSuspended(date, segment)
-                    val isSweepDay = wouldBeSweepDay && !isHolidaySkip
+                    val isSweepDay = CurbSchedule.sweepsOn(rows, date)
+                    val isHolidaySkip = CurbSchedule.holidaySkipOn(rows, date)
                     val isToday = date == today
 
                     Box(
