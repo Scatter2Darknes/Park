@@ -261,7 +261,7 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
                     // Only a still-safe location keeps cars parked "at" it; the branches above already
                     // re-armed everything when the safe flag itself flipped.
                     if (wasSafe && isSafeFromSweeping && wasOffStreet != isOffStreet) {
-                        recheckTowForCarsAt(context, location.id)
+                        recheckOffStreetForCarsAt(context, location.id)
                     }
                     customizingLocation = null
                     reload()

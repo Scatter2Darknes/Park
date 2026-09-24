@@ -170,9 +170,10 @@ fun LocationStyleDialog(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Off the street (garage or lot)", style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                "Skips temporary tow-zone checks here. Leave off for a spot on the " +
-                                        "street: safe from sweeping isn't safe from a tow zone. Street " +
-                                        "closures are still checked, since one can block a garage exit.",
+                                "Skips temporary tow-zone checks and the permit (RPP) time limit " +
+                                        "here. Leave off for a spot on the street: safe from sweeping " +
+                                        "isn't safe from a tow zone or a 2-hour limit. Street closures " +
+                                        "are still checked, since one can block a garage exit.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

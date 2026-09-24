@@ -16,13 +16,24 @@ data class SavedLocation(
     // NOT NULL DEFAULT false (see MIGRATION_15_16's comment for why); null and false both mean
     // "not marked safe," so read this as `== true`, never as a plain `if (isSafeFromSweeping)`.
     val isSafeFromSweeping: Boolean? = null,
-    // Off the street entirely (a garage, a private lot): temporary tow zones can't apply, so tow
-    // checks are skipped for a car parked here. Street-closure alerts still apply (a closed street
-    // can block a garage exit). Separate from isSafeFromSweeping on purpose: an on-street spot can be
-    // safe from sweeping and still get a tow zone. Read as `== true`, like isSafeFromSweeping.
+    // Off the street entirely (a garage, a private lot): no street parking rule can apply, so tow-zone
+    // checks AND the RPP non-permit time limit are skipped for a car parked here. Street-closure alerts
+    // still apply (a closed street can block a garage exit). Separate from isSafeFromSweeping on purpose:
+    // an on-street spot can be safe from sweeping and still get a tow zone or an RPP limit. Read as
+    // `== true`, like isSafeFromSweeping.
     val isOffStreet: Boolean? = null
 ) {
     fun toLatLng(): LatLng = LatLng(lat, lng)
+}
+
+/**
+ * Whether [parked] is at a saved location marked off the street. Checked at USE time (arming, the
+ * banner) rather than baked into the parked row, so switching the flag on or off applies to a car
+ * already parked there without re-saving it — a re-save would restart its RPP clock.
+ */
+suspend fun isParkedOffStreet(context: android.content.Context, parked: ParkedState): Boolean {
+    val locationId = parked.parkedViaSafeLocationId ?: return false
+    return AppDatabase.getInstance(context).savedLocationDao().getAll().firstOrNull { it.id == locationId }?.isOffStreet == true
 }
 
 @Dao

@@ -67,9 +67,10 @@ interface TowZoneDao {
     @Query("DELETE FROM tow_zone WHERE endEpochDay < :beforeEpochDay")
     suspend fun deleteEndedBefore(beforeEpochDay: Long): Int
 
-    // Same as StreetClosureDao.deleteNotSeenSince. The debug rows are never stamped, so a real sync
-    // that prunes also clears them — fine, they are throw-away test data.
-    @Query("DELETE FROM tow_zone WHERE lastSeenSyncId IS NULL OR lastSeenSyncId < :syncId")
+    // Same as StreetClosureDao.deleteNotSeenSince, except that the fake zones DebugControlReceiver's
+    // INJECT_TOW adds are left alone: they are never in the feed, so a real sync (e.g. the Tier 2 job
+    // finishing seconds after an inject) would otherwise delete them mid-test. CLEAR_DEBUG_TOW removes them.
+    @Query("DELETE FROM tow_zone WHERE (lastSeenSyncId IS NULL OR lastSeenSyncId < :syncId) AND rowId NOT LIKE 'debug-tow-%'")
     suspend fun deleteNotSeenSince(syncId: Long): Int
 
     @Query("SELECT COUNT(*) FROM tow_zone")

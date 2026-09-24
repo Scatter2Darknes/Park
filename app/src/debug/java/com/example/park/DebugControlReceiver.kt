@@ -43,7 +43,8 @@ import java.time.Instant
  * match). Each day's window starts at the time of day startInMinutes from now and lasts durationMinutes (under
  * 24 h), for `days` days in a row, every weekday. Optional feedAgeDays (>= 0) also pretends the last tow sync ran
  * just now and the feed's newest permit is that many days old, to test the "data may be out of date" wording.
- * Fake rows have ids starting "debug-tow-"; CLEAR_DEBUG_TOW removes them.
+ * It also sends the park-time tow notices a fresh park would ("in effect now" when the window is already on).
+ * Fake rows have ids starting "debug-tow-"; a real sync leaves them alone and CLEAR_DEBUG_TOW removes them.
  */
 class DebugControlReceiver : BroadcastReceiver() {
 
@@ -237,6 +238,9 @@ class DebugControlReceiver : BroadcastReceiver() {
             settings.setTowNewestEntryMillis(now - feedAgeDays * 24L * 60 * 60_000L)
         }
         recomputeParkedSchedule(context, carId)
+        // Also what a fresh park would send ("in effect now", or the uncertain "check signs" notice), so
+        // those can be tested without re-parking the car.
+        notifyTowOnPark(context, carId, parked.parkedAtMillis)
         BluetoothConnectionCenter.notifyParkedStateChanged()
         val match = findTowZonesForParkedCar(context, parked).firstOrNull { it.zone.rowId == zone.rowId }?.match
         val status = resolveTowStatus(context, parked, closureLeadMillis(context))

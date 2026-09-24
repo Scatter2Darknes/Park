@@ -297,8 +297,12 @@ suspend fun saveUnmanagedParkedState(
     val offsetMinutes = settingsRepo.notificationOffsetMinutes.first()
     val urgentEnabled = settingsRepo.urgentReminderEnabled.first()
     val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
+    // An off-street saved location (garage, lot) gets no RPP reminder. The match is still STORED above,
+    // so switching the location's off-street flag off later brings the reminder back (see isParkedOffStreet).
+    val offStreet = viaSafeLocationId != null &&
+        db.savedLocationDao().getAll().firstOrNull { it.id == viaSafeLocationId }?.isOffStreet == true
     val rppHandled = scheduleRppForParkedCar(
-        context, carId, car, rppRegulation, parkedAtMillis, parkedAt,
+        context, carId, car, rppRegulation.takeIf { !offStreet }, parkedAtMillis, parkedAt,
         reminderOffsetMillis = offsetMinutes * 60_000L,
         urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
     )

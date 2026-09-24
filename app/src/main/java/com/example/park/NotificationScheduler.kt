@@ -498,10 +498,12 @@ private class RppDeadlineInfo(val warning: RppWarning, val moveByMillis: Long, v
  * delivered still matches the value recomputed at a later re-arm.
  */
 private suspend fun currentRppDeadline(
+    context: Context,
     db: AppDatabase,
     parked: ParkedState,
     car: Car
 ): RppDeadlineInfo? {
+    if (isParkedOffStreet(context, parked)) return null // a garage or lot: no street time limit
     val regulation = parked.rppRegulationId?.let { db.rppZoneRegulationDao().getById(it) } ?: return null
     val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
     val warning = nextRppDeadline(regulation, car, parkedSince, sfNow()) ?: return null
@@ -602,7 +604,7 @@ private suspend fun armParkedState(
         }
     }
 
-    val rpp = currentRppDeadline(db, parked, car)
+    val rpp = currentRppDeadline(context, db, parked, car)
     if (rpp != null) {
         scheduleTiers(
             context, parked.carId, car.name,

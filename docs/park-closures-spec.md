@@ -462,5 +462,9 @@ rows blank. Times include `12:00 AM`–`11:59 PM` (all day, the most common), ov
   so its result arrives as the "in effect now" notice, an immediate advance alert and the banner line instead.
 - Off-street is only offered on a location already marked safe from sweeping: only those parks record which saved
   location the car is at, so the flag would do nothing on any other location.
+- **Off-street also skips the RPP non-permit time limit** (owner report, 2026-09-24: parking in an off-street garage
+  still gave a "non-permit time limit" reminder from the street outside). The §3 text only named tow zones. The RPP
+  match is still stored and the flag is checked when arming and in the banner (`isParkedOffStreet`), so switching it
+  off brings the reminder back without restarting the car's parked-at clock.
 - The merge rule with closures (§4) is not built; it needs the overlap test, which needs a current tow feed. A spot with
   both simply gets both alerts.

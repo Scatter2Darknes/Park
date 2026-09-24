@@ -39,6 +39,7 @@ suspend fun findConfidentRppMatch(context: Context, point: LatLng): RppZoneRegul
  * car holds a permit for the zone, or the regulation's DAYS doesn't parse to any active day.
  */
 suspend fun resolveRppDeadline(context: Context, parked: ParkedState, car: Car): RppWarning? {
+    if (isParkedOffStreet(context, parked)) return null // a garage or lot: no street time limit
     val regulationId = parked.rppRegulationId ?: return null
     val regulation = AppDatabase.getInstance(context).rppZoneRegulationDao().getById(regulationId) ?: return null
     val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()

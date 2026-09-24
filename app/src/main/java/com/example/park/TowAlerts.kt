@@ -190,10 +190,7 @@ fun towNearbyContent(carName: String, deadline: TowDeadline, nowMillis: Long): P
 suspend fun findTowZonesForParkedCar(context: Context, parked: ParkedState): List<TowHit> {
     val db = AppDatabase.getInstance(context)
     val fromEpochDay = LocalDate.now(SF_ZONE).minusDays(1).toEpochDay() // an overnight window from yesterday can still be on
-    if (parked.parkedViaSafeLocationId != null) {
-        val location = db.savedLocationDao().getAll().firstOrNull { it.id == parked.parkedViaSafeLocationId }
-        if (location?.isOffStreet == true) return emptyList()
-    }
+    if (isParkedOffStreet(context, parked)) return emptyList()
     val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
     val cnn = segment?.cnn?.takeIf { it.isNotBlank() }
     if (cnn != null) {
