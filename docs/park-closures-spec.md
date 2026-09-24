@@ -359,6 +359,10 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
 6. Overlap test.
 7. Street Closures: sync → blocked-in/nearby → merge rule → map layer.
 
+**Status (2026-09-24):** step 7 built (branches `closures-*`). Step 4 (Tow Zones) built on branch `tow-zones`
+**with the out-of-date warning** (owner decision, 2026-09-24), while the feed is still stale — see §10. Step 6 (overlap
+test) still waits for a current tow feed.
+
 ---
 
 ## 9. Findings (Step 0, 2026-09-23)
@@ -427,3 +431,36 @@ Deferred until the tow feed is current again.
   `veh_imp` for full vs partial, `cnn` for confident matches and the LineString for "nearby"
   distance and the map layer.
 - **Build order:** consider building **Street Closures first**, since that feed is live.
+
+---
+
+## 10. Tow Zones as built (branch `tow-zones`, 2026-09-24)
+
+**Owner decision (2026-09-24):** build Tow Zones now, with an out-of-date warning, although the feed is still
+stale. Checked again that day: newest `datetimeentered` = 2026-07-20, 7 rows with `enddate >= today`.
+
+**More feed findings (2026-09-24, every row entered since 2025):** days text is ranges (`Monday - Friday`),
+ranges that wrap past Sunday (`Friday - Wednesday`, `Saturday - Monday`), comma lists and single days; 425
+rows blank. Times include `12:00 AM`–`11:59 PM` (all day, the most common), overnight windows (`7:00 PM`–
+`7:00 AM`) and equal start/end (`5:00 AM`–`5:00 AM`, read as 24 h). `status` on live rows is `Approved`,
+`Installed` or blank; none is filtered out. Rows have no stable id of their own, so Socrata's `:id` is the key.
+
+| Piece | Where | Notes |
+|---|---|---|
+| Storage (Room v22) | `TowZone.kt`, `MIGRATION_21_22` | Daily window over a date range; CNNs stored as `",a,b,"` for an exact LIKE match. Also adds 3 tow markers on `parked_state` and `saved_location.isOffStreet`. |
+| Sync | `TowZoneApi.kt`, `TowZoneRepository.kt` | Citywide, `enddate >= yesterday`. Ended zones pruned by date; vanished ones via `pruneIfSafe`. Every sync also reads `max(datetimeentered)` (citywide) → `towNewestEntryMillis`. |
+| Matching | `findTowZonesForParkedCar` (`TowAlerts.kt`) | CONFIDENT: the chosen segment's CNN. UNCERTAIN: a no-segment park within 25 m of a zone's block. Off-street saved location: skipped. |
+| Reminders | `armTowReminders` (`NotificationScheduler.kt`) | Third family: `TOW_NORMAL`/`TOW_URGENT` before the next window start (deadline recomputed each arm, like RPP), roll-forward at that start, plus `TOW_ADVANCE` at the closure lead time before a zone's FIRST window (fires at once for a late permit). Confident matches only. |
+| Park time | `notifyTowOnPark`, `runParkTimeClosureCheck` | Tow and closure feeds fetched concurrently in the same 12 s budget. Parked inside a window → urgent "in effect now" (`TOW_ACTIVE`). Uncertain match within the lead time → one "may be on your block — check signs" notice. |
+| Banner / widget | `CarActions.kt`, `MapScreen.kt`, `ParkWidget.kt` | `DeadlineKind.TOW` in `soonestDeadline()`. Tow line: in effect / maybe nearby / check unavailable / **"City tow-zone data may be out of date (no new permits since Jul 20) — check signs"**. Never "no tow zones". |
+| Staleness rule | `towFeedIsStale` | Newest permit older than 7 days (or unknown) → stale. Shown even when a confident deadline exists, since a stale feed can miss a second, sooner zone. |
+| Settings | `SettingsScreen.kt`, `LocationStyleDialog.kt` | Tow shares the closure switches (§5: one park-time switch, one Tier 2 switch) and lead time. Data & Sync shows "Tow zones last checked" and a red out-of-date note. "Off the street" switch under "Safe from street cleaning"; in backups. |
+| Debug | `INJECT_TOW`, `CLEAR_DEBUG_TOW`, `debug_hooks.py inject-tow / clear-tow` | `--feed-age-days` fakes a stale feed. |
+
+**Differences from §3:**
+- No in-app warning inside the parking flow's confirm step. The park-time check runs after the save (as §3 requires),
+  so its result arrives as the "in effect now" notice, an immediate advance alert and the banner line instead.
+- Off-street is only offered on a location already marked safe from sweeping: only those parks record which saved
+  location the car is at, so the flag would do nothing on any other location.
+- The merge rule with closures (§4) is not built; it needs the overlap test, which needs a current tow feed. A spot with
+  both simply gets both alerts.
