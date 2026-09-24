@@ -34,3 +34,6 @@ logs/
 park_database*
 __pycache__/
 *.pyc
+
+# Personal Claude Code permission overrides
+.claude/settings.local.json

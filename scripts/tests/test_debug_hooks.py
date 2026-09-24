@@ -134,11 +134,36 @@ class HooksTest(unittest.TestCase):
         with self.assertRaises(ScriptError):
             debug_hooks.park(device, 1, 37.78, -122.46)
 
+    def test_inject_closure_sends_typed_extras(self):
+        device = FakeDevice(replies={"INJECT_CLOSURE": ["INJECT_CLOSURE: debug-1 kind=blocked"]})
+        debug_hooks.inject_closure(device, 2, "nearby", 2885, 60)
+        command = next(c for c in device.commands if c.startswith("am broadcast"))
+        self.assertIn("-a com.example.park.debug.INJECT_CLOSURE", command)
+        self.assertIn("--el carId 2", command)
+        self.assertIn("--es kind nearby", command)
+        self.assertIn("--ei startInMinutes 2885", command)
+        self.assertIn("--ei durationMinutes 60", command)
+
+    def test_inject_closure_refuses_bad_extras_before_sending(self):
+        device = FakeDevice()
+        for kwargs in ({"kind": "tow"}, {"start_in_minutes": 1.5}, {"duration_minutes": "60"}):
+            args = {"kind": "blocked", "start_in_minutes": 10, "duration_minutes": 60, **kwargs}
+            with self.assertRaises(ScriptError, msg=repr(kwargs)):
+                debug_hooks.inject_closure(device, 1, **args)
+        self.assertFalse([c for c in device.commands if c.startswith("am broadcast")])
+
+    def test_inject_closure_rejected_by_the_receiver_is_an_error(self):
+        device = FakeDevice(replies={"INJECT_CLOSURE": ["INJECT_CLOSURE rejected: need a PARKED carId (got 9)"]})
+        with self.assertRaises(ScriptError) as ctx:
+            debug_hooks.inject_closure(device, 9, "blocked", 10, 60)
+        self.assertIn("need a PARKED carId", str(ctx.exception))
+
     # ---- safety: anything that changes state is emulator-only ----
 
     def test_state_changing_hooks_refuse_a_physical_phone_before_sending_anything(self):
         phone = FakeDevice(serial="R52WA025A5R")
-        for action in (lambda: debug_hooks.park(phone, 1, 37.78, -122.46), lambda: debug_hooks.unpark(phone, 1), lambda: debug_hooks.rearm(phone)):
+        for action in (lambda: debug_hooks.park(phone, 1, 37.78, -122.46), lambda: debug_hooks.unpark(phone, 1), lambda: debug_hooks.rearm(phone),
+                       lambda: debug_hooks.inject_closure(phone, 1, "blocked", 10, 60), lambda: debug_hooks.clear_closures(phone)):
             with self.assertRaises(ScriptError) as ctx:
                 action()
             self.assertIn("only runs on an emulator", str(ctx.exception))

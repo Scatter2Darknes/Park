@@ -6,6 +6,8 @@ reboot -> check again.
     python scripts/debug_hooks.py park --car-id 1 --lat 37.7802 --lng -122.4610
     python scripts/debug_hooks.py unpark --car-id 1
     python scripts/debug_hooks.py rearm                                  # the same re-arm the boot receiver runs
+    python scripts/debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885
+    python scripts/debug_hooks.py clear-closures
 
 The receiver only exists in DEBUG builds (a release APK doesn't contain it - scripts/check_release_manifest.py proves
 that). It answers by writing to Logcat under the tag ParkDebug, which this script reads back and prints.
@@ -35,6 +37,10 @@ REPLY_TIMEOUT = 12.0
 # A point on 3rd Avenue (Richmond District, San Francisco) that has a street-sweeping segment, taken from the DataSF data.
 DEFAULT_LAT, DEFAULT_LNG = 37.7802, -122.4610
 
+# INJECT_CLOSURE extras: whole numbers go as --ei, the closure kind as a checked string.
+INT_EXTRAS = ("startInMinutes", "durationMinutes")
+CLOSURE_KINDS = ("blocked", "nearby")
+
 
 def require_emulator(adb: Adb, what: str) -> None:
     if not is_emulator_serial(adb.serial):
@@ -57,6 +63,14 @@ def broadcast_command(name: str, **extras) -> str:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ScriptError(f"carId must be a whole number (got {value!r}).")
             command += f" --el carId {value}"
+        elif key in INT_EXTRAS:
+            if isinstance(value, bool) or not isinstance(value, int) or not -2**31 <= value < 2**31:
+                raise ScriptError(f"{key} must be a whole number (got {value!r}).")
+            command += f" --ei {key} {value}"
+        elif key == "kind":
+            if value not in CLOSURE_KINDS:
+                raise ScriptError(f"kind must be one of {', '.join(CLOSURE_KINDS)} (got {value!r}).")
+            command += f" --es kind {value}"
         else:
             try:
                 degrees = float(value)
@@ -121,6 +135,19 @@ def rearm(adb: Adb) -> List[str]:
     return call(adb, "REARM", "REARM")
 
 
+def inject_closure(adb: Adb, car_id: int, kind: str, start_in_minutes: int, duration_minutes: int) -> List[str]:
+    """Put a fake street closure on a parked car's block (kind=blocked) or ~120 m away (kind=nearby), then re-arm it."""
+    require_emulator(adb, "inject-closure")
+    return call(adb, "INJECT_CLOSURE", "INJECT_CLOSURE", carId=car_id, kind=kind,
+                startInMinutes=start_in_minutes, durationMinutes=duration_minutes)
+
+
+def clear_closures(adb: Adb) -> List[str]:
+    """Remove every fake closure INJECT_CLOSURE added, then re-arm."""
+    require_emulator(adb, "clear-closures")
+    return call(adb, "CLEAR_DEBUG_CLOSURES", "CLEAR_DEBUG_CLOSURES")
+
+
 def message_of(line: str) -> str:
     """The text after 'ParkDebug:' in a threadtime line."""
     return line.split(f"{TAG}:", 1)[1].strip() if f"{TAG}:" in line else line
@@ -140,6 +167,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     u = sub.add_parser("unpark", help="clear a car's parked state and reminders (emulator only)")
     u.add_argument("--car-id", type=int, default=1)
     sub.add_parser("rearm", help="run the re-arm the boot receiver runs (emulator only)")
+    c = sub.add_parser("inject-closure", help="add a fake street closure for a parked car (emulator only)")
+    c.add_argument("--car-id", type=int, default=1)
+    c.add_argument("--kind", choices=CLOSURE_KINDS, default="blocked")
+    c.add_argument("--start-in-minutes", type=int, default=3 * 24 * 60,
+                   help="when it starts, from now (default 3 days; the alert goes out 2 days before the start)")
+    c.add_argument("--duration-minutes", type=int, default=12 * 60)
+    sub.add_parser("clear-closures", help="remove every fake closure and re-arm (emulator only)")
     args = parser.parse_args(argv)
 
     try:
@@ -150,6 +184,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             lines = park(adb, args.car_id, args.lat, args.lng)
         elif args.command == "unpark":
             lines = unpark(adb, args.car_id)
+        elif args.command == "inject-closure":
+            lines = inject_closure(adb, args.car_id, args.kind, args.start_in_minutes, args.duration_minutes)
+        elif args.command == "clear-closures":
+            lines = clear_closures(adb)
         else:
             lines = rearm(adb)
     except ScriptError as exc:
