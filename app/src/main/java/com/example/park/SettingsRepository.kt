@@ -40,6 +40,7 @@ object SettingsKeys {
     val IMMINENT_THRESHOLD_DAYS = floatPreferencesKey("imminent_threshold_days")
     val REFRESH_INTERVAL_HOURS = intPreferencesKey("refresh_interval_hours")
     val LAST_REFRESH_MILLIS = longPreferencesKey("last_refresh_millis")
+    val CLOSURES_LAST_SYNC_MILLIS = longPreferencesKey("closures_last_sync_millis")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
     val DRIVING_MODE_AUTO_CENTER = booleanPreferencesKey("driving_mode_auto_center")
     val DRIVING_MODE_AUTO_ZOOM = booleanPreferencesKey("driving_mode_auto_zoom")
@@ -508,6 +509,17 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLastRefreshMillis(value: Long) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.LAST_REFRESH_MILLIS] = value }
+    }
+
+    /** When the street-closure feed was last fetched COMPLETELY (see StreetClosureRepository), or
+     *  null if never. Decides whether the park-time check needs the network and whether the app can
+     *  honestly say it checked for closures (see closureDataIsUsable). */
+    val closuresLastSyncMillis: Flow<Long?> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.CLOSURES_LAST_SYNC_MILLIS]
+    }
+
+    suspend fun setClosuresLastSyncMillis(value: Long) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURES_LAST_SYNC_MILLIS] = value }
     }
 
     /**

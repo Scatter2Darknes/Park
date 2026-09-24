@@ -191,6 +191,10 @@ suspend fun simulateBluetoothDisconnect(context: Context, car: Car) {
         }
     }
     enqueueWidgetRefresh(context)
+
+    // The save above started a background street-closure check. Keep this receiver (goAsync)
+    // alive until it finishes, so the process isn't dropped mid-fetch. Last, so nothing above waits.
+    if (result is AutoParkResult.Subscribed) ClosureCheckCenter.awaitFor(car.id, CLOSURE_CHECK_RECEIVER_WAIT_MILLIS)
 }
 
 /**

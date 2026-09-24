@@ -106,6 +106,8 @@ private suspend fun handleMovedCar(context: Context, carId: Long) {
                     // simulateBluetoothDisconnect, its other caller) doesn't refresh the widget
                     // itself — the earlier refresh above only reflected the just-cleared state.
                     enqueueWidgetRefresh(context)
+                    // Keep this receiver alive for the closure check the save started (see BluetoothDisconnectReceiver).
+                    ClosureCheckCenter.awaitFor(carId, CLOSURE_CHECK_RECEIVER_WAIT_MILLIS)
                 }
                 is AutoParkResult.NeedsConfirmation -> showAutoDetectNotification(
                     context = context,

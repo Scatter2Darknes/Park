@@ -454,6 +454,7 @@ fun cancelParkingReminder(context: Context, carId: Long) {
     // A manual meter timer belongs to the spot it was set at, same as everything else here —
     // stale once the car is no longer parked there.
     cancelMeterTimer(context, carId)
+    cancelClosureAlert(context, carId) // likewise a closure alert
 }
 
 /** An RPP deadline plus the two epoch-millis values derived from it. */
@@ -582,6 +583,13 @@ private suspend fun armParkedState(
         cancelAlarm(context, parked.carId, ReminderKind.RPP_NORMAL)
         cancelAlarm(context, parked.carId, ReminderKind.RPP_URGENT)
         cancelRollForward(context, parked.carId, RollForwardKind.RPP)
+    }
+
+    // Street closures: independent of both families above, and never allowed to break them.
+    try {
+        armClosureAlert(context, parked, car.name)
+    } catch (e: Exception) {
+        android.util.Log.w("ClosureAlert", "Arming the closure alert for car ${parked.carId} failed", e)
     }
     return deadlineChanged
 }

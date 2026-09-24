@@ -46,6 +46,7 @@
         </receiver>
         <receiver android:name=".ScheduleRollForwardReceiver" android:exported="false" />
         <receiver android:name=".MeterTimerReceiver" android:exported="false" />
+        <receiver android:name=".ClosureAlertReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

@@ -59,6 +59,9 @@ interface StreetClosureDao {
     """)
     suspend fun getNearby(nowMillis: Long, minLat: Double, maxLat: Double, minLng: Double, maxLng: Double): List<StreetClosure>
 
+    @Query("SELECT * FROM street_closure WHERE objectId = :objectId LIMIT 1")
+    suspend fun getById(objectId: String): StreetClosure?
+
     @Query("SELECT * FROM street_closure WHERE cnn = :cnn AND endMillis > :nowMillis")
     suspend fun getForCnn(cnn: String, nowMillis: Long): List<StreetClosure>
 
@@ -76,4 +79,8 @@ interface StreetClosureDao {
 
     @Query("SELECT COUNT(*) FROM street_closure")
     suspend fun count(): Int
+
+    /** Removes the fake closures DebugControlReceiver's INJECT_CLOSURE adds (debug builds only use this). */
+    @Query("DELETE FROM street_closure WHERE objectId LIKE 'debug-%'")
+    suspend fun deleteDebugRows(): Int
 }

@@ -40,6 +40,11 @@ class StreetClosureRepository(private val context: Context) {
             } catch (e: Exception) {
                 Log.w("ClosureSync", "Stale-closure cleanup failed", e)
             }
+            // Only a fetch that provably saw the whole feed counts as "checked": a partial one could
+            // be missing exactly the closure on the user's block.
+            if (fetch.complete && fetch.serverTotal != null && fetch.rawRows == fetch.serverTotal) {
+                SettingsRepository(context).setClosuresLastSyncMillis(now)
+            }
             return fetch.keptRows
         } finally {
             fetchMutex.unlock()
