@@ -22,13 +22,15 @@ Goal: replace the manual "run an adb command, paste the output, decode it by han
 
 | Task | Branch | State |
 |---|---|---|
-| A1 Shared helpers + guard test | `automation-scripts` | not started |
-| A2 `backup-db` | same | not started |
-| A3 `alarms` (decoder) | same | not started |
-| A4 `rearm-check` (boot and foreground modes) | same | not started |
-| A5 `capture-logs` | same | not started |
-| A6 Debug-only control receiver (optional) | `debug-hooks` | not started |
-| A7 CI on push | `ci` | not started |
+| A1 Shared helpers + guard test | `automation-scripts` | done (Python, not PowerShell: Z's choice) |
+| A2 `backup-db` | same | done; verified on emulator |
+| A3 `alarms` (decoder) | same | done; verified on emulator |
+| A4 `rearm-check` (boot and foreground modes) | same | done; both modes PASS on emulator |
+| A5 `capture-logs` | same | done; verified on emulator |
+| A6 Debug-only control receiver (optional) | `debug-hooks` | done; release APK checked clean |
+| A7 CI on push | `ci` | done locally; never run on GitHub (not pushed) |
+
+None of it has run on a physical phone yet. Details: `docs/StatusUpdate-Automation.md`.
 
 ## A1. Shared helpers and guard
 

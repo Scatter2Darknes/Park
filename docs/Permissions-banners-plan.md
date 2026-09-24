@@ -17,9 +17,9 @@ On Z's S25, `POST_NOTIFICATIONS` was **denied** (`granted=false, flags=[USER_SET
 
 | Task | Branch | State |
 |---|---|---|
-| P1 Notifications-blocked banner + Settings row | `notif-blocked-banner` | not started |
-| P1b Contextual permission request at first park (optional) | same | not started |
-| P2 Script/digest updates | same | not started |
+| P1 Notifications-blocked banner + Settings row | `notif-blocked-banner` | code done; verified on emulator, awaiting S25 check |
+| P1b Contextual permission request at first park (optional) | same | not started (**needs Z's decision**) |
+| P2 Script/digest updates | same | done; verified on emulator |
 | P3 Boot-missed detector | `boot-missed-detector` | **gated on Z** |
 
 ## P1. Notifications-blocked banner
