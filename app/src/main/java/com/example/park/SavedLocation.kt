@@ -15,7 +15,12 @@ data class SavedLocation(
     // a location must be deliberately marked safe before it can auto-apply. Nullable rather than
     // NOT NULL DEFAULT false (see MIGRATION_15_16's comment for why); null and false both mean
     // "not marked safe," so read this as `== true`, never as a plain `if (isSafeFromSweeping)`.
-    val isSafeFromSweeping: Boolean? = null
+    val isSafeFromSweeping: Boolean? = null,
+    // Off the street entirely (a garage, a private lot): temporary tow zones can't apply, so tow
+    // checks are skipped for a car parked here. Street-closure alerts still apply (a closed street
+    // can block a garage exit). Separate from isSafeFromSweeping on purpose: an on-street spot can be
+    // safe from sweeping and still get a tow zone. Read as `== true`, like isSafeFromSweeping.
+    val isOffStreet: Boolean? = null
 ) {
     fun toLatLng(): LatLng = LatLng(lat, lng)
 }

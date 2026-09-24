@@ -229,6 +229,44 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate21To22_keepsParkedAndSavedRows_andAddsTowTableAndNullColumns() {
+        helper.createDatabase(TEST_DB, 21).apply {
+            execSQL(
+                """
+                INSERT INTO parked_state
+                    (id, carId, segmentBlockSweepId, sideConfirmed, parkedLat, parkedLng,
+                     parkedAtMillis, nextSweepAtMillis, notificationScheduled, closureDeliveredForMillis)
+                VALUES
+                    (1, 42, 'block-123', 1, 37.7749, -122.4194, 1000000, 2000000, 1, 5000000)
+                """.trimIndent()
+            )
+            execSQL("INSERT INTO saved_location (id, name, lat, lng, isSafeFromSweeping) VALUES (7, 'Garage', 37.1, -122.1, 1)")
+            close()
+        }
+
+        // Also validates tow_zone's columns and index against schemas/22.json.
+        val db = helper.runMigrationsAndValidate(TEST_DB, 22, true, MIGRATION_21_22)
+
+        db.query("SELECT carId, closureDeliveredForMillis, towNormalDeliveredForMillis, towUrgentDeliveredForMillis, towAdvanceDeliveredForMillis FROM parked_state").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(42L, c.getLong(0))
+            assertEquals(5000000L, c.getLong(1))
+            assertTrue(c.isNull(2)); assertTrue(c.isNull(3)); assertTrue(c.isNull(4))
+        }
+        db.query("SELECT isSafeFromSweeping, isOffStreet FROM saved_location").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1, c.getInt(0))
+            assertTrue("isOffStreet should be NULL (= not off-street) after migration", c.isNull(1))
+        }
+        db.execSQL(
+            """
+            INSERT INTO tow_zone (rowId, cnns, startEpochDay, endEpochDay, startMinute, endMinute, allDay, daysMask)
+            VALUES ('row-1', ',5440000,', 20000, 20010, 420, 1020, 0, 31)
+            """.trimIndent()
+        )
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

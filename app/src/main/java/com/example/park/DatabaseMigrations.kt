@@ -264,10 +264,50 @@ val MIGRATION_20_21 = Migration(20, 21) { db ->
     db.execSQL("ALTER TABLE parked_state ADD COLUMN closureDeliveredForMillis INTEGER")
 }
 
+/**
+ * v21 -> v22: temporary tow zones (see TowZone.kt, TowAlerts.kt).
+ *  - New table tow_zone, plus its endEpochDay index (the name Room generates for it).
+ *  - parked_state gets the tow reminder family's three delivery markers (normal, urgent, and the
+ *    advance alert at the lead time). Null = not delivered yet, like the sweep/RPP markers.
+ *  - saved_location gets isOffStreet: a garage or lot where tow zones can't apply. Null reads as
+ *    "not off-street" (the conservative default: tow warnings keep applying until the owner says so).
+ * All additive; nothing existing changes.
+ */
+val MIGRATION_21_22 = Migration(21, 22) { db ->
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS tow_zone (
+            rowId TEXT NOT NULL PRIMARY KEY,
+            caseNumber TEXT,
+            permitNumber TEXT,
+            cnns TEXT NOT NULL,
+            address TEXT,
+            streetName TEXT,
+            fromStreet TEXT,
+            toStreet TEXT,
+            startEpochDay INTEGER NOT NULL,
+            endEpochDay INTEGER NOT NULL,
+            startMinute INTEGER NOT NULL,
+            endMinute INTEGER NOT NULL,
+            allDay INTEGER NOT NULL,
+            daysMask INTEGER NOT NULL,
+            daysText TEXT,
+            enteredMillis INTEGER,
+            lastSeenSyncId INTEGER
+        )
+        """.trimIndent()
+    )
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_tow_zone_endEpochDay ON tow_zone (endEpochDay)")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN towNormalDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN towUrgentDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN towAdvanceDeliveredForMillis INTEGER")
+    db.execSQL("ALTER TABLE saved_location ADD COLUMN isOffStreet INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21
+    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
 )
 
 /*

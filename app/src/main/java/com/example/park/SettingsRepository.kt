@@ -45,6 +45,8 @@ object SettingsKeys {
     val CLOSURE_BACKGROUND_SYNC = booleanPreferencesKey("closure_background_sync") // Tier 2
     val CLOSURE_ALERT_LEAD_HOURS = intPreferencesKey("closure_alert_lead_hours")
     val CLOSURE_TIER2_OFFER_SHOWN = booleanPreferencesKey("closure_tier2_offer_shown")
+    val TOW_LAST_SYNC_MILLIS = longPreferencesKey("tow_last_sync_millis")
+    val TOW_NEWEST_ENTRY_MILLIS = longPreferencesKey("tow_newest_entry_millis")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
     val DRIVING_MODE_AUTO_CENTER = booleanPreferencesKey("driving_mode_auto_center")
     val DRIVING_MODE_AUTO_ZOOM = booleanPreferencesKey("driving_mode_auto_zoom")
@@ -577,6 +579,32 @@ class SettingsRepository(private val context: Context) {
 
     /** Whether any closure feature is on. Both off = the app behaves as it did before closures. */
     suspend fun closuresEnabled(): Boolean = closureParkTimeCheck.first() || closureBackgroundSync.first()
+
+    /**
+     * Whether tow-zone checks run. The spec (§5) gives tow zones and closures ONE park-time switch and
+     * ONE Tier 2 switch, so this is the same pair as [closuresEnabled]. Both off = no tow fetch, no tow
+     * alarms, no tow banner line.
+     */
+    suspend fun towEnabled(): Boolean = closuresEnabled()
+
+    /** When the tow-zone feed was last fetched COMPLETELY (see TowZoneRepository), or null if never. */
+    val towLastSyncMillis: Flow<Long?> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.TOW_LAST_SYNC_MILLIS]
+    }
+
+    suspend fun setTowLastSyncMillis(value: Long) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.TOW_LAST_SYNC_MILLIS] = value }
+    }
+
+    /** When the newest permit in the tow feed was entered, as of the last sync, or null if never read.
+     *  Old = SFMTA has stopped updating the feed (see towFeedIsStale). */
+    val towNewestEntryMillis: Flow<Long?> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.TOW_NEWEST_ENTRY_MILLIS]
+    }
+
+    suspend fun setTowNewestEntryMillis(value: Long) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.TOW_NEWEST_ENTRY_MILLIS] = value }
+    }
 
     val closureAlertLeadHours: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[SettingsKeys.CLOSURE_ALERT_LEAD_HOURS] ?: SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS

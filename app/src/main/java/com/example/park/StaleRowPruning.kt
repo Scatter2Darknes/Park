@@ -134,6 +134,17 @@ suspend fun pruneStaleStreetClosures(context: Context, syncId: Long, existingCou
     )
 }
 
+/** Tow-zone counterpart of [pruneStaleStreetClosures]: removes zones that vanished from the feed.
+ *  Ended zones are removed by date (TowZoneDao.deleteEndedBefore). */
+suspend fun pruneStaleTowZones(context: Context, syncId: Long, existingCount: Int, fetch: FeedFetch) {
+    pruneIfSafe(
+        "tow-zone", existingCount, fetch,
+        deleteUnseen = { AppDatabase.getInstance(context).towZoneDao().deleteNotSeenSince(syncId) },
+        warn = { android.util.Log.w("TowSync", it) },
+        info = { android.util.Log.d("TowSync", it) }
+    )
+}
+
 /** Metered-zone counterpart of [pruneStaleStreetSegments]. [fetch] is the meter LOCATION fetch
  *  specifically (see MeteredZoneRepository) — the reliable half this app's own reachability
  *  determines completeness from, independent of whether the schedule half also succeeded. */

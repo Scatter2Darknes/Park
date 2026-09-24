@@ -47,7 +47,13 @@ data class ParkedState(
     // The START time of the latest street closure whose "blocked in" alert was delivered for this
     // row (see ClosureAlerts.kt), or null if none. Closure alerts go out in start order, so only a
     // closure starting AFTER this one is still due. Resets with the row, like the markers above.
-    val closureDeliveredForMillis: Long? = null
+    val closureDeliveredForMillis: Long? = null,
+    // The tow reminder family's delivery markers (see TowAlerts.kt), same meaning as the sweep/RPP
+    // ones above: the tow deadline (an enforcement window's start) each tier was delivered for.
+    // "Advance" is the heads-up at the tow/closure lead time (default 2 days before).
+    val towNormalDeliveredForMillis: Long? = null,
+    val towUrgentDeliveredForMillis: Long? = null,
+    val towAdvanceDeliveredForMillis: Long? = null
 ) {
     /** The deadline [kind]'s reminder was last delivered for, or null if it never was. */
     fun deliveredForMillis(kind: ReminderKind): Long? = when (kind) {
