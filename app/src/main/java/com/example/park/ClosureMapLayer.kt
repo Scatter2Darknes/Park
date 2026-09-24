@@ -42,42 +42,55 @@ data class ClosureBlock(
     val cnn: String,
     val closures: List<StreetClosure>,
     val points: List<LatLng>,
-    val affectsParkedCar: Boolean
+    /** How this block affects a parked car: BLOCKED_IN (the car's own block), NEARBY, or null (it doesn't). */
+    val carImpact: ClosureImpact? = null
 ) {
     val next: StreetClosure get() = closures.first()
+    val affectsParkedCar: Boolean get() = carImpact != null
 }
 
-/** The closures among a parked car's [hits] worth highlighting: the same windows the banner uses. */
-fun carClosuresForMap(hits: List<ClosureHit>, nowMillis: Long, leadMillis: Long): List<StreetClosure> =
+/** The hits among a parked car's [hits] worth highlighting: the same windows the banner uses. */
+fun carClosuresForMap(hits: List<ClosureHit>, nowMillis: Long, leadMillis: Long): List<ClosureHit> =
     hits.filter { hit ->
         val c = hit.closure
         c.endMillis > nowMillis && when (hit.impact) {
             ClosureImpact.BLOCKED_IN -> c.startMillis <= nowMillis + maxOf(CLOSURE_MAP_HORIZON_MILLIS, leadMillis)
             ClosureImpact.NEARBY -> c.startMillis <= nowMillis + leadMillis
         }
-    }.map { it.closure }
+    }
 
 /**
  * Merges the citywide [layerClosures] (already limited to the viewport; empty when the layer is off)
- * with the parked cars' [carClosures] into one [ClosureBlock] per block. Layer rows outside the
- * horizon or already over are dropped; a block with no usable geometry can't be drawn and is skipped.
+ * with the parked cars' [carHits] into one [ClosureBlock] per block. Layer rows outside the horizon
+ * or already over are dropped; a block with no usable geometry can't be drawn and is skipped. A block
+ * that is BLOCKED_IN for one car and NEARBY for another counts as BLOCKED_IN (the stronger).
  */
 fun groupClosuresForMap(
     layerClosures: List<StreetClosure>,
-    carClosures: List<StreetClosure>,
+    carHits: List<ClosureHit>,
     nowMillis: Long,
     horizonEndMillis: Long = closureMapHorizonEndMillis(nowMillis)
 ): List<ClosureBlock> {
-    val carIds = carClosures.map { it.objectId }.toSet()
+    val carImpactById = carHits.groupBy { it.closure.objectId }
+        .mapValues { (_, hits) -> hits.minOf { it.impact } } // BLOCKED_IN sorts before NEARBY
     val inHorizon = layerClosures.filter { it.endMillis > nowMillis && it.startMillis < horizonEndMillis }
-    return (inHorizon + carClosures)
+    return (inHorizon + carHits.map { it.closure })
         .distinctBy { it.objectId }
         .groupBy { it.cnn }
         .mapNotNull { (cnn, rows) ->
             val sorted = rows.sortedBy { it.startMillis }
             val points = sorted.firstOrNull { it.points.size >= 2 }?.points ?: return@mapNotNull null
-            ClosureBlock(cnn, sorted, points, affectsParkedCar = rows.any { it.objectId in carIds })
+            ClosureBlock(cnn, sorted, points, carImpact = rows.mapNotNull { carImpactById[it.objectId] }.minOrNull())
         }
+}
+
+/** The dialog's closing note for a tapped block: what it means for the parked car, if anything. */
+fun closureDetailNote(block: ClosureBlock): String = when (block.carImpact) {
+    ClosureImpact.BLOCKED_IN -> "This one is on your car's block. A closure isn't a ticket risk, but you may not " +
+        "be able to drive out while it's on."
+    ClosureImpact.NEARBY -> "This one is near where your car is parked. Not a ticket risk: check the signs, " +
+        "it may make getting out slower."
+    null -> "Not a ticket risk: it can mean you can't drive through, or out, while it's on."
 }
 
 private val HORIZON_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")

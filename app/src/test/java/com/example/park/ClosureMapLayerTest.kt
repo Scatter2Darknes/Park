@@ -33,7 +33,7 @@ class ClosureMapLayerTest {
     fun recurringRowsOnOneBlock_mergeIntoOneBlock_soonestFirst() {
         val blocks = groupClosuresForMap(
             listOf(closure("d3", startIn = 3 * day), closure("d1", startIn = day), closure("d2", startIn = 2 * day)),
-            carClosures = emptyList(), nowMillis = now
+            carHits = emptyList(), nowMillis = now
         )
         assertEquals(1, blocks.size)
         assertEquals(listOf("d1", "d2", "d3"), blocks.single().closures.map { it.objectId })
@@ -49,7 +49,7 @@ class ClosureMapLayerTest {
                 closure("nextMonth", cnn = "3", startIn = 20 * day),
                 closure("ended", cnn = "4", startIn = -2 * day, length = hour)
             ),
-            carClosures = emptyList(), nowMillis = now
+            carHits = emptyList(), nowMillis = now
         )
         assertEquals(setOf("1", "2"), blocks.map { it.cnn }.toSet())
     }
@@ -61,7 +61,7 @@ class ClosureMapLayerTest {
         val oct1At0030 = ZonedDateTime.of(2026, 10, 1, 0, 30, 0, 0, SF_ZONE).toInstant().toEpochMilli()
         val blocks = groupClosuresForMap(
             listOf(closure("sep30evening", cnn = "1", startIn = sep30At8pm - now), closure("oct1", cnn = "2", startIn = oct1At0030 - now)),
-            carClosures = emptyList(), nowMillis = now
+            carHits = emptyList(), nowMillis = now
         )
         assertEquals(listOf("1"), blocks.map { it.cnn }) // the evening of the labelled day is in; the next day isn't
         assertEquals(ZonedDateTime.of(2026, 10, 1, 0, 0, 0, 0, SF_ZONE).toInstant().toEpochMilli(), closureMapHorizonEndMillis(now))
@@ -80,13 +80,44 @@ class ClosureMapLayerTest {
     @Test
     fun theParkedCarsClosure_isAlwaysDrawnAndFlagged_evenWithTheLayerOff() {
         val mine = closure("mine", cnn = "9", startIn = 3 * day)
-        val blocks = groupClosuresForMap(layerClosures = emptyList(), carClosures = listOf(mine), nowMillis = now)
+        val mineHit = ClosureHit(mine, ClosureImpact.BLOCKED_IN, 0.0)
+        val blocks = groupClosuresForMap(layerClosures = emptyList(), carHits = listOf(mineHit), nowMillis = now)
         assertTrue(blocks.single().affectsParkedCar)
         // With the layer on as well, the same row isn't drawn twice, and other blocks aren't flagged.
-        val both = groupClosuresForMap(listOf(mine, closure("other", cnn = "8")), listOf(mine), now)
+        val both = groupClosuresForMap(listOf(mine, closure("other", cnn = "8")), listOf(mineHit), now)
         assertEquals(2, both.size)
         assertTrue(both.first { it.cnn == "9" }.affectsParkedCar)
         assertFalse(both.first { it.cnn == "8" }.affectsParkedCar)
+    }
+
+    @Test
+    fun theDialogNote_tellsTheCarsBlockFromNearbyFromNeither() {
+        val onBlock = closure("b", cnn = "1")
+        val near = closure("n", cnn = "2")
+        val blocks = groupClosuresForMap(
+            listOf(onBlock, near, closure("x", cnn = "3")),
+            listOf(ClosureHit(onBlock, ClosureImpact.BLOCKED_IN, 0.0), ClosureHit(near, ClosureImpact.NEARBY, 150.0)),
+            now
+        ).associateBy { it.cnn }
+        assertEquals(ClosureImpact.BLOCKED_IN, blocks.getValue("1").carImpact)
+        assertEquals(ClosureImpact.NEARBY, blocks.getValue("2").carImpact)
+        assertEquals(null, blocks.getValue("3").carImpact)
+        assertTrue(closureDetailNote(blocks.getValue("1")).startsWith("This one is on your car's block"))
+        assertTrue(closureDetailNote(blocks.getValue("2")).startsWith("This one is near where your car is parked"))
+        // Only the car's own block may say it could keep the car from driving out.
+        assertFalse(closureDetailNote(blocks.getValue("2")).contains("drive out"))
+        assertTrue(closureDetailNote(blocks.getValue("3")).startsWith("Not a ticket risk"))
+    }
+
+    @Test
+    fun aBlockThatIsOneCarsBlockAndAnotherCarsNeighbour_countsAsTheCarsBlock() {
+        val c = closure("c", cnn = "1")
+        val block = groupClosuresForMap(
+            emptyList(),
+            listOf(ClosureHit(c, ClosureImpact.NEARBY, 150.0), ClosureHit(c, ClosureImpact.BLOCKED_IN, 0.0)),
+            now
+        ).single()
+        assertEquals(ClosureImpact.BLOCKED_IN, block.carImpact)
     }
 
     @Test
@@ -103,7 +134,7 @@ class ClosureMapLayerTest {
         val nearbyIn3d = ClosureHit(closure("n3", startIn = 3 * day), ClosureImpact.NEARBY, 150.0)
         assertEquals(
             listOf("b6", "n1"),
-            carClosuresForMap(listOf(blockedIn6d, blockedIn9d, nearbyIn1d, nearbyIn3d), now, lead).map { it.objectId }
+            carClosuresForMap(listOf(blockedIn6d, blockedIn9d, nearbyIn1d, nearbyIn3d), now, lead).map { it.closure.objectId }
         )
     }
 

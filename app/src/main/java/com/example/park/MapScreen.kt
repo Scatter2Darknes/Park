@@ -1770,9 +1770,7 @@ fun MapScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            if (block.affectsParkedCar) "This one affects where your car is parked. A closure isn't a ticket " +
-                                    "risk, but you may not be able to drive out while it's on."
-                            else "Not a ticket risk: it can mean you can't drive through, or out, while it's on.",
+                            closureDetailNote(block),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
