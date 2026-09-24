@@ -122,6 +122,25 @@ fun closureNearbyContent(carName: String, closure: StreetClosure, nowMillis: Lon
     return "$carName: street closure nearby" to text
 }
 
+/**
+ * The personalised line on the one-time Tier 2 offer card: how many distinct closures (a recurring
+ * one, expanded into a row per day, counts once) affect the parked car in the next week. [hits] are
+ * the car's closures (its block or within the nearby radius, ~2 blocks). Never claims "none" from
+ * data too old to say so.
+ */
+fun closureOfferSummary(hits: List<ClosureHit>, dataUsable: Boolean, nowMillis: Long): String {
+    val count = hits
+        .filter { it.closure.endMillis > nowMillis && it.closure.startMillis <= nowMillis + CLOSURE_BANNER_HORIZON_MILLIS }
+        .distinctBy { it.closure.caseNum ?: it.closure.objectId }
+        .size
+    return when {
+        count == 1 -> "1 street closure within 2 blocks of your car this week."
+        count > 1 -> "$count street closures within 2 blocks of your car this week."
+        dataUsable -> "No street closures near your car this week — but new ones are permitted all the time."
+        else -> "Park couldn't check for street closures near your car just now."
+    }
+}
+
 /** Whether closure data last synced at [lastSyncMillis] is recent enough to say "checked". */
 fun closureDataIsUsable(lastSyncMillis: Long?, nowMillis: Long): Boolean =
     lastSyncMillis != null && nowMillis - lastSyncMillis <= CLOSURE_DATA_MAX_AGE_MILLIS
@@ -228,6 +247,16 @@ suspend fun resolveClosureStatus(context: Context, parked: ParkedState, lastSync
     val now = System.currentTimeMillis()
     val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
     return closureStatusFor(hits, closureDataIsUsable(lastSyncMillis, now), now, leadMillis)
+}
+
+/** [closureOfferSummary] for a parked car, from stored data (call after its park-time check has finished). */
+suspend fun closureOfferSummaryFor(context: Context, carId: Long): String {
+    val parked = AppDatabase.getInstance(context).parkedStateDao().getForCar(carId)
+        ?: return closureOfferSummary(emptyList(), dataUsable = false, nowMillis = System.currentTimeMillis())
+    val now = System.currentTimeMillis()
+    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val usable = closureDataIsUsable(SettingsRepository(context).closuresLastSyncMillis.first(), now)
+    return closureOfferSummary(hits, usable, now)
 }
 
 /** The closure lead time currently set, in ms. */

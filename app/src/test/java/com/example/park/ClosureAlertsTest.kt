@@ -167,6 +167,27 @@ class ClosureAlertsTest {
         assertNull(pickNearbyToNotifyOnPark(listOf(near), now, leadMillis = 12 * hour))
     }
 
+    // --- the one-time Tier 2 offer card ---
+
+    @Test
+    fun offerSummary_countsDistinctClosuresThisWeek_notDailyRows() {
+        // One Shared Space expanded into 3 daily rows (same case) + one street fair = 2 closures.
+        fun daily(day: Int) = nearby(closure(startIn = day * this.day + hour, id = "ss$day").copy(caseNum = "SS-1"))
+        val fair = blocked(closure(startIn = 2 * day, id = "fair").copy(caseNum = "FAIR"))
+        val nextMonth = nearby(closure(startIn = 20 * day, id = "later").copy(caseNum = "LATER"))
+        assertEquals("2 street closures within 2 blocks of your car this week.",
+            closureOfferSummary(listOf(daily(0), daily(1), daily(2), fair, nextMonth), dataUsable = true, nowMillis = now))
+        assertEquals("1 street closure within 2 blocks of your car this week.",
+            closureOfferSummary(listOf(fair), dataUsable = true, nowMillis = now))
+    }
+
+    @Test
+    fun offerSummary_neverClaimsNoneFromOldData() {
+        assertTrue(closureOfferSummary(emptyList(), dataUsable = true, nowMillis = now).startsWith("No street closures"))
+        assertEquals("Park couldn't check for street closures near your car just now.",
+            closureOfferSummary(emptyList(), dataUsable = false, nowMillis = now))
+    }
+
     // --- wording ---
 
     @Test

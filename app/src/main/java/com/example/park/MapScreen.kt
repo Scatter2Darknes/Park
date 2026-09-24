@@ -302,25 +302,36 @@ fun MapScreen(
         enqueueWidgetRefresh(context)
     }
 
-    // The one-time "keep checking for street closures in the background?" offer (Tier 2, spec §1).
-    var showClosureTier2Offer by remember { mutableStateOf(false) }
+    // The one-time "keep checking for street closures in the background?" offer (Tier 2, spec §1),
+    // shown as a card on the map (ClosureOfferCard), NOT a dialog: right after two or three routine
+    // parking dialogs, another dialog is easy to tap away without reading.
+    var closureOfferVisible by remember { mutableStateOf(false) }
+    var closureOfferText by remember { mutableStateOf("") }
 
     /**
      * Every MANUAL park in the flow below ends here, after its save: redraw the parked-car markers
      * and the banner, close the flow, and — the first time only — offer Tier 2 background closure
      * checks. Bluetooth auto-parks never come through here (no screen to show the offer on), so they
-     * don't use it up. "Shown" is recorded by the dialog itself once it is actually on screen (see
-     * its LaunchedEffect), so a dialog that never appeared can't use the offer up.
+     * don't use it up. "Shown" is recorded by the card itself once it is actually on screen (see its
+     * LaunchedEffect), so a card that never appeared can't use the offer up.
      */
-    suspend fun finishManualPark() {
+    suspend fun finishManualPark(carId: Long) {
         mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
         refreshActiveParkedCars()
         parkingFlowState = ParkingFlowState.Hidden
         val settings = SettingsRepository(context)
-        val alreadyShown = settings.closureTier2OfferShown.first()
-        val backgroundOn = settings.closureBackgroundSync.first()
-        android.util.Log.d("ClosureAlert", "Tier 2 offer after manual park: alreadyShown=$alreadyShown backgroundOn=$backgroundOn -> show=${!alreadyShown && !backgroundOn}")
-        if (!alreadyShown && !backgroundOn) showClosureTier2Offer = true
+        suspend fun offerWanted() = !settings.closureTier2OfferShown.first() && !settings.closureBackgroundSync.first()
+        val wanted = offerWanted()
+        android.util.Log.d("ClosureAlert", "Tier 2 offer after manual park: shownBefore=${settings.closureTier2OfferShown.first()} " +
+                "backgroundOn=${settings.closureBackgroundSync.first()} -> offer=$wanted")
+        if (!wanted) return
+        // Let the park settle on screen first, and let the park-time closure check finish so the
+        // card's count reflects fresh data rather than whatever was stored before this park.
+        kotlinx.coroutines.delay(2_000)
+        ClosureCheckCenter.awaitFor(carId, CLOSURE_CHECK_RECEIVER_WAIT_MILLIS)
+        if (!offerWanted()) return // decided in Settings meanwhile
+        closureOfferText = closureOfferSummaryFor(context, carId)
+        closureOfferVisible = true
     }
 
     // Settings-backed state. Loaded once on entry — MapScreen fully remounts when
@@ -1654,38 +1665,25 @@ fun MapScreen(
                 onPendingSaveLocationConsumed()
             })
         }
-        if (showClosureTier2Offer) {
-            // Runs once when the dialog enters the screen: only now is the offer used up.
+        if (closureOfferVisible) {
+            // Runs once when the card enters the screen: only now is the offer used up.
             LaunchedEffect(Unit) {
                 SettingsRepository(context).setClosureTier2OfferShown()
                 android.util.Log.d("ClosureAlert", "Tier 2 offer shown (recorded; it won't appear again)")
             }
-            AlertDialog(
-                onDismissRequest = { showClosureTier2Offer = false },
-                title = { Text("Keep checking for street closures?") },
-                text = {
-                    Text(
-                        "Park can re-check for street closures around your parked car in the " +
-                                "background every $CLOSURE_BACKGROUND_SYNC_HOURS hours, so a closure " +
-                                "permitted after you park still gets you an alert. It downloads the " +
-                                "citywide list (your location is never sent) and follows your " +
-                                "Wi-Fi-only setting. You can change this anytime in Settings → Data & Sync."
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showClosureTier2Offer = false
-                        scope.launch {
-                            SettingsRepository(context).setClosureBackgroundSync(true)
-                            applyClosureSyncSchedule(context, androidx.work.ExistingPeriodicWorkPolicy.REPLACE)
-                        }
-                    }) { Text("Turn on") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showClosureTier2Offer = false }) { Text("Not now") }
-                }
-            )
         }
+        ClosureOfferCard(
+            visible = closureOfferVisible,
+            summary = closureOfferText,
+            onTurnOn = {
+                closureOfferVisible = false
+                scope.launch {
+                    SettingsRepository(context).setClosureBackgroundSync(true)
+                    applyClosureSyncSchedule(context, androidx.work.ExistingPeriodicWorkPolicy.REPLACE)
+                }
+            },
+            onNotNow = { closureOfferVisible = false }
+        )
         when (val state = parkingFlowState) {
             is ParkingFlowState.ChoosingCar -> {
                 var cars by remember { mutableStateOf<List<Car>>(emptyList()) }
@@ -1717,7 +1715,7 @@ fun MapScreen(
                             } else {
                                 saveParkedState(context, state.carId, state.match.segment, state.point)
                             }
-                            finishManualPark()
+                            finishManualPark(state.carId)
                         }
                     },
                     onReject = {
@@ -1754,7 +1752,7 @@ fun MapScreen(
                             } else {
                                 saveParkedState(context, state.carId, state.segment, state.point)
                             }
-                            finishManualPark()
+                            finishManualPark(state.carId)
                         }
                     },
                     onReject = {
@@ -1799,7 +1797,7 @@ fun MapScreen(
                             TextButton(onClick = {
                                 scope.launch {
                                     saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
-                                    finishManualPark()
+                                    finishManualPark(state.carId)
                                 }
                             }) { Text("Yes, pin my current location") }
                             TextButton(onClick = {
@@ -1808,7 +1806,7 @@ fun MapScreen(
                             TextButton(onClick = {
                                 scope.launch {
                                     saveParkedState(context, state.carId, state.segment, state.point)
-                                    finishManualPark()
+                                    finishManualPark(state.carId)
                                 }
                             }) { Text("No, just highlight street") }
                             meterMatch?.let { meter ->
@@ -1836,7 +1834,7 @@ fun MapScreen(
                         val meterLabel = state.meter.streetName?.let { "the meter on $it" } ?: "the meter"
                         scheduleMeterTimer(context, state.carId, carName, meterLabel, System.currentTimeMillis() + minutes * 60_000L)
                     }
-                    finishManualPark()
+                    finishManualPark(state.carId)
                 }
 
                 AlertDialog(
@@ -1897,7 +1895,7 @@ fun MapScreen(
                                     context, state.carId, state.segment, state.originalPoint,
                                     tappedPoint.latitude, tappedPoint.longitude
                                 )
-                                finishManualPark()
+                                finishManualPark(state.carId)
                             }
                         }
                     }
@@ -1927,7 +1925,7 @@ fun MapScreen(
                         TextButton(onClick = {
                             scope.launch {
                                 saveUnmanagedParkedState(context, state.carId, state.point)
-                                finishManualPark()
+                                finishManualPark(state.carId)
                             }
                         }) { Text("Not a street cleaning risk spot") }
                         TextButton(onClick = {
@@ -1954,7 +1952,7 @@ fun MapScreen(
                     TextButton(onClick = {
                         scope.launch {
                             saveUnmanagedParkedState(context, state.carId, state.point, viaSafeLocationId = state.location.id)
-                            finishManualPark()
+                            finishManualPark(state.carId)
                         }
                     }) { Text("Yes") }
                 },
@@ -1996,6 +1994,66 @@ private fun BoxScope.MapInstructionBanner(text: String) {
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
         )
+    }
+}
+
+/**
+ * The one-time Tier 2 offer (background street-closure checks), as a card that slides up over the
+ * bottom of the map. Deliberately NOT an AlertDialog: it arrives right after the parking dialogs,
+ * and one more dialog of the same shape is easy to tap away on reflex. This one looks different
+ * (its own colour, an icon, a line about the user's own spot, a filled button) and has no
+ * outside-tap dismiss, so it stays until the user picks. Sits at the same height as
+ * BottomCancelPill, clear of the "Parked" button.
+ */
+@Composable
+private fun BoxScope.ClosureOfferCard(visible: Boolean, summary: String, onTurnOn: () -> Unit, onNotNow: () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .navigationBarsPadding()
+            .padding(start = 16.dp, end = 16.dp, bottom = 88.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            shadowElevation = 8.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🚧", style = MaterialTheme.typography.headlineSmall)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Street closures near your car",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Park can keep checking in the background (every $CLOSURE_BACKGROUND_SYNC_HOURS h), so a " +
+                            "closure permitted after you park still reaches you. Your location is never sent. " +
+                            "Change it anytime in Settings → Data & Sync.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = onTurnOn) { Text("Turn on") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onNotNow) { Text("Not now") }
+                }
+            }
+        }
     }
 }
 
