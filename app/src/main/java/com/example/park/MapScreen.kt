@@ -1824,6 +1824,10 @@ fun MapScreen(
                     .padding(start = 12.dp, bottom = 96.dp),
                 shape = RoundedCornerShape(50),
                 color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.92f),
+                // Explicit: Surface picks a text colour only for exact theme colours, and the .copy(alpha)
+                // above isn't one, so the label fell back to black — unreadable on the dark theme's pill.
+                // onSurface is white in dark mode and near-black in light mode.
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 2.dp
             ) {
                 Text(
