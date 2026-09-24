@@ -26,7 +26,14 @@ import java.time.Instant
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.PARK --el carId 1 --es lat 37.7749 --es lng -122.4194
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.UNPARK --el carId 1
  *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.REARM
+ *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.INJECT_CLOSURE --el carId 1 --es kind blocked --ei startInMinutes 5 --ei durationMinutes 60
+ *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.CLEAR_DEBUG_CLOSURES
  * then read the answer with:  adb logcat -d -s ParkDebug
+ *
+ * INJECT_CLOSURE puts a fake street closure on the parked car's block (kind=blocked, the default) or ~120 m
+ * away (kind=nearby), starting startInMinutes from now (default 3 days, i.e. before the 2-day alert point) and
+ * lasting durationMinutes (default 12 h), then re-arms that car. Fake rows have ids starting "debug-"; a real
+ * closure sync removes them as unseen, and CLEAR_DEBUG_CLOSURES removes them directly.
  */
 class DebugControlReceiver : BroadcastReceiver() {
 
@@ -50,6 +57,13 @@ class DebugControlReceiver : BroadcastReceiver() {
                     ACTION_PARK -> park(app, carId, lat, lng)
                     ACTION_UNPARK -> unpark(app, carId)
                     ACTION_REARM -> rearm(app)
+                    ACTION_INJECT_CLOSURE -> injectClosure(
+                        app, carId,
+                        kind = intent.getStringExtra("kind") ?: "blocked",
+                        startInMinutes = intent.getIntExtra("startInMinutes", 3 * 24 * 60),
+                        durationMinutes = intent.getIntExtra("durationMinutes", 12 * 60)
+                    )
+                    ACTION_CLEAR_DEBUG_CLOSURES -> clearDebugClosures(app)
                     else -> Log.w(TAG, "unknown action $action")
                 }
             } catch (e: Exception) {
@@ -94,6 +108,49 @@ class DebugControlReceiver : BroadcastReceiver() {
         }
         unsubscribeParking(context, carId)
         Log.i(TAG, "UNPARK: car $carId cleared (reminders cancelled, parked state removed)")
+    }
+
+    private suspend fun injectClosure(context: Context, carId: Long, kind: String, startInMinutes: Int, durationMinutes: Int) {
+        val db = AppDatabase.getInstance(context)
+        val parked = if (carId < 0) null else db.parkedStateDao().getForCar(carId)
+        if (parked == null || kind !in setOf("blocked", "nearby") || durationMinutes <= 0) {
+            Log.w(TAG, "INJECT_CLOSURE rejected: need a PARKED carId (got $carId), kind blocked|nearby (got $kind), durationMinutes > 0")
+            return
+        }
+        val base = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng)
+        else LatLng(parked.parkedLat, parked.parkedLng)
+        val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
+        val halfBlockLng = 50.0 / (111320.0 * Math.cos(Math.toRadians(base.lat))) // ~50 m east-west
+        val points = when {
+            kind == "nearby" -> {
+                val north = base.lat + 120.0 / 111320.0 // ~120 m north: inside the nearby radius, not on the block
+                listOf(LatLng(north, base.lng - halfBlockLng), LatLng(north, base.lng + halfBlockLng))
+            }
+            segment != null && segment.points.size >= 2 -> segment.points
+            else -> listOf(LatLng(base.lat, base.lng - halfBlockLng), LatLng(base.lat, base.lng + halfBlockLng))
+        }
+        val now = System.currentTimeMillis()
+        val start = now + startInMinutes * 60_000L
+        val closure = StreetClosure(
+            objectId = "debug-$now", caseNum = null, caseName = "Debug closure", type = "Special Event",
+            cnn = if (kind == "blocked") segment?.cnn ?: "debug-block" else "debug-nearby",
+            street = segment?.corridor ?: "DEBUG ST", fromStreet = null, toStreet = null,
+            vehicleImpact = "all-lanes-closed", startMillis = start, endMillis = start + durationMinutes * 60_000L,
+            points = points, centroidLat = points.map { it.lat }.average(), centroidLng = points.map { it.lng }.average()
+        )
+        db.streetClosureDao().insertAll(listOf(closure))
+        recomputeParkedSchedule(context, carId)
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        val status = resolveClosureStatus(context, parked, SettingsRepository(context).closuresLastSyncMillis.first())
+        Log.i(TAG, "INJECT_CLOSURE: ${closure.objectId} kind=$kind start=${fmt(start)} end=${fmt(closure.endMillis)} " +
+                "-> banner: ${closureBannerText(status, System.currentTimeMillis())}")
+    }
+
+    private suspend fun clearDebugClosures(context: Context) {
+        val removed = AppDatabase.getInstance(context).streetClosureDao().deleteDebugRows()
+        rearmAllActiveReminders(context)
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        Log.i(TAG, "CLEAR_DEBUG_CLOSURES: removed $removed fake closure(s), re-armed")
     }
 
     private suspend fun rearm(context: Context) {
@@ -146,7 +203,10 @@ class DebugControlReceiver : BroadcastReceiver() {
                     "notificationScheduled=${parked.notificationScheduled}")
             Log.i(TAG, "  delivered-for-deadline markers: normal=${fmt(parked.normalDeliveredForMillis)} " +
                     "urgent=${fmt(parked.urgentDeliveredForMillis)} rppNormal=${fmt(parked.rppNormalDeliveredForMillis)} " +
-                    "rppUrgent=${fmt(parked.rppUrgentDeliveredForMillis)}")
+                    "rppUrgent=${fmt(parked.rppUrgentDeliveredForMillis)} closure=${fmt(parked.closureDeliveredForMillis)}")
+            val closureStatus = resolveClosureStatus(context, parked, settings.closuresLastSyncMillis.first())
+            Log.i(TAG, "  closures: dataLastSynced=${fmt(settings.closuresLastSyncMillis.first())} " +
+                    "banner='${closureBannerText(closureStatus, nowMillis)}'")
 
             parked.nextSweepAtMillis?.let { deadline ->
                 expectedAlarms += expect("car ${parked.carId} sweep reminder", deadline - offsetMillis, nowMillis)
@@ -190,5 +250,7 @@ class DebugControlReceiver : BroadcastReceiver() {
         const val ACTION_PARK = "com.example.park.debug.PARK"
         const val ACTION_UNPARK = "com.example.park.debug.UNPARK"
         const val ACTION_REARM = "com.example.park.debug.REARM"
+        const val ACTION_INJECT_CLOSURE = "com.example.park.debug.INJECT_CLOSURE"
+        const val ACTION_CLEAR_DEBUG_CLOSURES = "com.example.park.debug.CLEAR_DEBUG_CLOSURES"
     }
 }

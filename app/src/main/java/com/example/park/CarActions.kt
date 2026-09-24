@@ -1,12 +1,20 @@
 package com.example.park
 
 import android.content.Context
+import kotlinx.coroutines.flow.first
 import java.time.ZoneId
 
 // rppDeadline is resolved once here (at load time), same point-in-time-snapshot approach
 // parkedState.nextSweepAtMillis already uses — not continuously live, but refreshed on every
 // reload() the same way sweep data already is.
-data class CarWithStatus(val car: Car, val parkedState: ParkedState?, val rppDeadline: RppWarning? = null)
+// closureStatus: street closures affecting the parked spot (see ClosureAlerts.kt), resolved at load
+// time like rppDeadline. Null when the car isn't parked. NOT a deadline, so soonestDeadline ignores it.
+data class CarWithStatus(
+    val car: Car,
+    val parkedState: ParkedState?,
+    val rppDeadline: RppWarning? = null,
+    val closureStatus: ClosureStatus? = null
+)
 
 enum class DeadlineKind { SWEEP, RPP, METER }
 data class CarDeadline(val millis: Long, val kind: DeadlineKind)
@@ -29,10 +37,19 @@ fun CarWithStatus.soonestDeadline(): CarDeadline? {
 
 suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
     val db = AppDatabase.getInstance(context)
+    val closuresLastSync = SettingsRepository(context).closuresLastSyncMillis.first()
     return db.carDao().getAll().map { car ->
         val parked = db.parkedStateDao().getForCar(car.id)
         val rppDeadline = parked?.let { resolveRppDeadline(context, it, car) }
-        CarWithStatus(car, parked, rppDeadline)
+        val closureStatus = parked?.let {
+            try {
+                resolveClosureStatus(context, it, closuresLastSync)
+            } catch (e: Exception) {
+                android.util.Log.w("ClosureAlert", "Resolving closure status for car ${car.id} failed", e)
+                ClosureStatus.Unchecked // can't tell, so never "clear"
+            }
+        }
+        CarWithStatus(car, parked, rppDeadline, closureStatus)
     }
 }
 

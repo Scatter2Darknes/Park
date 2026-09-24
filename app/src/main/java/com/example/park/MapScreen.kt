@@ -1217,6 +1217,22 @@ fun MapScreen(
                                 )
                             }
 
+                            // Street closures (not deadlines, so separate from the countdown above).
+                            // Collapsed: the single most important closure line across all parked
+                            // cars, named when it isn't the car shown above.
+                            if (!parkedBannerExpanded) {
+                                activeParkedCars
+                                    .mapNotNull { c -> closureBannerText(c.closureStatus, now)?.let { Triple(c, it, closureBannerRank(c.closureStatus)) } }
+                                    .minByOrNull { it.third }
+                                    ?.let { (c, line, _) ->
+                                        Text(
+                                            if (c.car.id == mostUrgent.car.id) line else "${c.car.name}: $line",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
+                            }
+
                             if (parkedBannerExpanded) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 HorizontalDivider()
@@ -1265,6 +1281,9 @@ fun MapScreen(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
                                             Text(itemNextText, style = MaterialTheme.typography.bodySmall, color = itemTextColor)
+                                            closureBannerText(item.closureStatus, now)?.let {
+                                                Text(it, style = MaterialTheme.typography.bodySmall)
+                                            }
                                         }
                                         Text(
                                             itemCountdown,
