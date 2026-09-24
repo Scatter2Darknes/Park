@@ -389,7 +389,7 @@ Other findings, from the 15,851 rows entered since 2025-01-01:
 | `cnn` | On every row, **exactly one** per row. Matches the sweep `cnn` format. |
 | Side / direction | `direction` is `undefined` / `unknown` / `both`: no per-side info. A closure closes the block. |
 | Full vs partial | **Yes: `veh_imp`** (WZDx VehicleImpact): `all-lanes-closed` 94%, `some-lanes-closed` 6%, `all-lanes-open` 0.4%. Only `all-lanes-closed` produces `BlockedIn`; the other two become `Nearby` at most. |
-| Time fields | `start_dt`/`end_dt` local SF time, plus `start_utc`/`end_utc` (always 7 or 8 h apart, so DST is handled). **Use the `_utc` fields.** |
+| Time fields | `start_dt`/`end_dt` local SF time, plus `start_utc`/`end_utc`. **The `_utc` fields are wrong on ~10% of daylight-saving rows** (253 of ~2,780 starts: local + 8 h instead of + 7 h, i.e. an hour late); winter rows are all correct. **Use the local fields, read as `America/Los_Angeles`**, with `_utc` only as a fallback. (Corrected while building; the first pass of these findings said the opposite.) |
 | Windows | Median 13 h. 325 rows span several days. 165 of those don't run midnight-to-midnight (e.g. Fri 16:00 → Mon 06:00, or a year-long Shared Space 10:00 → 23:59), and the feed can't say whether that is continuous or daily. **Treat `start → end` as continuous** (it over-warns, never under-warns). |
 | Recurring | **Expanded into one row per occurrence**: e.g. a Shared Space case has 326 rows for one CNN, one per day. No recurrence rule to parse. |
 | Types | Roadway Shared Spaces 3,143 (car-free streets, mostly permanent-ish), Special Event 1,226, Special Traffic Permit 259 (construction; `info` free text). |
