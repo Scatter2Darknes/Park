@@ -78,7 +78,11 @@ python scripts\debug_hooks.py dump                                        # what
 python scripts\debug_hooks.py park --car-id 1 --lat 37.7802 --lng -122.4610
 python scripts\debug_hooks.py unpark --car-id 1
 python scripts\debug_hooks.py rearm                                       # the re-arm BootReceiver runs
+python scripts\debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885   # fake street closure; alert in ~5 min
+python scripts\debug_hooks.py clear-closures                              # remove every fake closure, re-arm
 ```
+
+`inject-closure` puts a fake street closure on a parked car's block (`--kind blocked`) or about 120 m away (`--kind nearby`), starting `--start-in-minutes` from now (default 3 days) and lasting `--duration-minutes` (default 12 h). The "blocked in" alert goes out 2 days before the start, or at once if that's already past; `nearby` never notifies, it only shows in the banner. `dump` prints each car's closure marker and banner line. Both closure commands are emulator-only.
 
 `park` goes through the normal `saveParkedState` path. `dump` lists the alarms the app expects, which should match `alarms.py`'s live list (checked on the emulator: 6 expected, 6 live, same times). Replies come back through Logcat (tag `ParkDebug`). `dump` also prints a `notifications:` line (`notificationsEnabled`, each channel's importance, and `reminderHealth`: `OK`, `NOTIFICATIONS_BLOCKED` or `REMINDER_CHANNEL_BLOCKED`; a channel importance of 0 means it is switched off). On an emulator, `adb shell pm revoke com.example.park android.permission.POST_NOTIFICATIONS` (kills the app, keeps its data) and `pm grant` toggle the app-level block; a single channel is switched off in the system settings page. `dump` only reads; `park`, `unpark` and `rearm` change state, so they run on an emulator only. `adb emu geo fix <lon> <lat>` sets the emulator's GPS location if you want to test that too.
 
