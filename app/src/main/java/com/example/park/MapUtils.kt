@@ -73,6 +73,10 @@ private val METER_BADGE_COLOR_INT = android.graphics.Color.parseColor("#00838F")
 private val CLOSURE_CASING_COLOR_INT = android.graphics.Color.parseColor("#212121")
 private val CLOSURE_DASH_COLOR_INT = android.graphics.Color.parseColor("#FF6D00")
 private const val MAX_CLOSURE_BADGES = 40
+// Where along its block a closure badge may sit, in the order tried (0.5 = the middle).
+private val CLOSURE_BADGE_SLOTS = listOf(0.5, 0.3, 0.7, 0.15, 0.85)
+// A closure badge ("🚧 2d") is a wider pill than a meter icon, so it keeps a little more clearance.
+private const val CLOSURE_BADGE_CLEARANCE_FACTOR = 1.3f
 
 // Keyed by a prefix ("car|"/"loc|") plus colorHex|icon|photoPath — styling rarely changes,
 // so repeated overlay refreshes (every debounced pan) reuse the same Bitmap instead of
@@ -1109,14 +1113,36 @@ suspend fun drawClosureOverlays(
         mapView.overlays.add(casing)
         mapView.overlays.add(dashes)
     }
+    // Badges must not sit on the sweep countdown / RPP / meter badges loadAndDrawSegments just
+    // placed (or on each other). Those keep their spots (a countdown or RPP label is about a ticket);
+    // a closure badge instead slides along its own block to the first free spot. With none free, a
+    // parked car's closure still gets its badge at the midpoint (never hidden); any other closure
+    // skips its badge — its line still shows, and a pan/zoom redraw usually frees a spot.
+    val radiusPx = BADGE_SUPPRESSION_RADIUS_DP * CLOSURE_BADGE_CLEARANCE_FACTOR * context.resources.displayMetrics.density
+    val takenScreenPoints = mapView.overlays
+        .filter { it is CountdownLabelMarker || it is RppZoneLabelMarker || it is MeterBadgeMarker }
+        .map { mapView.projection.toPixels((it as Marker).position, null) }
+        .toMutableList()
+    fun isFree(p: LatLng): Boolean {
+        val s = mapView.projection.toPixels(GeoPoint(p.lat, p.lng), null)
+        return takenScreenPoints.none { t ->
+            val dx = (t.x - s.x).toDouble(); val dy = (t.y - s.y).toDouble()
+            sqrt(dx * dx + dy * dy) < radiusPx
+        }
+    }
+
     blocks
         .map { block -> block to midpointAlongPath(block.points) }
-        // The parked car's own closures always get their badge; then nearest the center.
+        // The parked car's own closures are placed first; then nearest the center.
         .sortedWith(compareBy<Pair<ClosureBlock, LatLng>> { !it.first.affectsParkedCar }.thenBy { distanceMetersBetween(center, it.second) })
         .take(MAX_CLOSURE_BADGES)
         .forEach { (block, midpoint) ->
+            val spot = CLOSURE_BADGE_SLOTS.map { pointAlongPath(block.points, it) }.firstOrNull(::isFree)
+                ?: midpoint.takeIf { block.affectsParkedCar }
+                ?: return@forEach
+            takenScreenPoints += mapView.projection.toPixels(GeoPoint(spot.lat, spot.lng), null)
             val badge = ClosureBadgeMarker(mapView).apply {
-                position = GeoPoint(midpoint.lat, midpoint.lng)
+                position = GeoPoint(spot.lat, spot.lng)
                 icon = buildCountdownLabelIcon(context, closureBadgeText(block, now), CLOSURE_CASING_COLOR_INT, compact = true)
                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 setOnMarkerClickListener { _, _ ->
@@ -1171,16 +1197,22 @@ fun distanceMetersBetween(a: LatLng, b: LatLng): Double {
  * comment) — the same "representative point of this block" this function already serves as
  * for label placement.
  */
-fun midpointAlongPath(points: List<LatLng>): LatLng {
+fun midpointAlongPath(points: List<LatLng>): LatLng = pointAlongPath(points, 0.5)
+
+/**
+ * The point [fraction] of the way along the polyline's real path length (0 = start, 1 = end).
+ * midpointAlongPath is fraction 0.5; closure badges also try other fractions to avoid other badges.
+ */
+fun pointAlongPath(points: List<LatLng>, fraction: Double): LatLng {
     if (points.size < 2) return points.firstOrNull() ?: LatLng(0.0, 0.0)
     val totalLength = points.zipWithNext().sumOf { (a, b) -> distanceMetersBetween(a, b) }
     if (totalLength == 0.0) return points.first()
-    val halfLength = totalLength / 2.0
+    val targetLength = totalLength * fraction.coerceIn(0.0, 1.0)
     var accumulated = 0.0
     for (i in 0 until points.size - 1) {
         val segLength = distanceMetersBetween(points[i], points[i + 1])
-        if (accumulated + segLength >= halfLength) {
-            val t = if (segLength == 0.0) 0.0 else (halfLength - accumulated) / segLength
+        if (accumulated + segLength >= targetLength) {
+            val t = if (segLength == 0.0) 0.0 else (targetLength - accumulated) / segLength
             return LatLng(
                 points[i].lat + (points[i + 1].lat - points[i].lat) * t,
                 points[i].lng + (points[i + 1].lng - points[i].lng) * t
