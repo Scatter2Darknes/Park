@@ -401,26 +401,28 @@ fun SettingsScreen(
             )
         }
 
-        if (urgentReminderEnabled) {
-            Spacer(Modifier.height(4.dp))
+        // Always shown (greyed out while the urgent reminder is off) so its timing is discoverable.
+        Spacer(Modifier.height(4.dp))
+        DependentSetting(enabled = urgentReminderEnabled, needs = "Urgent reminder on") {
             val currentUrgentLabel = URGENT_OFFSET_PRESETS
                 .firstOrNull { it.first == urgentOffsetMinutes }?.second
                 ?: "$urgentOffsetMinutes minutes before"
 
             ExposedDropdownMenuBox(
-                expanded = urgentOffsetMenuExpanded,
-                onExpandedChange = { urgentOffsetMenuExpanded = it }
+                expanded = urgentOffsetMenuExpanded && urgentReminderEnabled,
+                onExpandedChange = { if (urgentReminderEnabled) urgentOffsetMenuExpanded = it }
             ) {
                 OutlinedTextField(
                     value = currentUrgentLabel,
                     onValueChange = {},
                     readOnly = true,
+                    enabled = urgentReminderEnabled,
                     label = { Text("Move it now") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = urgentOffsetMenuExpanded) },
                     modifier = Modifier.menuAnchor().fillMaxWidth()
                 )
                 ExposedDropdownMenu(
-                    expanded = urgentOffsetMenuExpanded,
+                    expanded = urgentOffsetMenuExpanded && urgentReminderEnabled,
                     onDismissRequest = { urgentOffsetMenuExpanded = false }
                 ) {
                     // Only offers presets strictly less than the early reminder's own offset
@@ -1312,8 +1314,12 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.error
             )
         }
-        if (closureParkTimeCheck || closureBackgroundSync) {
-            Spacer(Modifier.height(8.dp))
+        // Always shown (greyed out while both closure switches are off) so it's discoverable.
+        Spacer(Modifier.height(8.dp))
+        DependentSetting(
+            enabled = closureParkTimeCheck || closureBackgroundSync,
+            needs = "one of the two switches above on"
+        ) {
             Button(
                 onClick = {
                     closureCheckRunning = true
@@ -1337,7 +1343,7 @@ fun SettingsScreen(
                         closureCheckRunning = false
                     }
                 },
-                enabled = !closureCheckRunning
+                enabled = !closureCheckRunning && (closureParkTimeCheck || closureBackgroundSync)
             ) { Text(if (closureCheckRunning) "Checking…" else "Check Closures & Tow Zones Now") }
             closureCheckMessage?.let {
                 Spacer(Modifier.height(4.dp))
@@ -1373,7 +1379,22 @@ fun SettingsScreen(
             )
         }
 
-        if (bluetoothAutoDetectEnabled) {
+        // Auto-detect runs from background broadcasts, so without "Allow all the time" location it gets
+        // no GPS fix at all. Said right here, next to the switch, not only further down the page.
+        if (bluetoothAutoDetectEnabled && !hasBackgroundLocation) {
+            Text(
+                "Needs: Location set to “Allow all the time” — without it, auto-detect " +
+                        "can't find where you parked while the app is closed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            TextButton(onClick = { openAppSettingsForBackgroundLocation(context) }) {
+                Text("Open Location Settings")
+            }
+        }
+
+        // Always shown (greyed out while auto-detect is off) so these options are discoverable.
+        DependentSetting(enabled = bluetoothAutoDetectEnabled, needs = "Bluetooth auto-detect on") {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
@@ -1388,6 +1409,7 @@ fun SettingsScreen(
                 }
                 Switch(
                     checked = bluetoothAutoDropPin,
+                    enabled = bluetoothAutoDetectEnabled,
                     onCheckedChange = { checked ->
                         bluetoothAutoDropPin = checked
                         scope.launch { settings.setBluetoothAutoDropPin(checked) }
@@ -1408,6 +1430,7 @@ fun SettingsScreen(
                 }
                 Switch(
                     checked = bluetoothAutoUnparkOnReconnect,
+                    enabled = bluetoothAutoDetectEnabled,
                     onCheckedChange = { checked ->
                         bluetoothAutoUnparkOnReconnect = checked
                         scope.launch { settings.setBluetoothAutoUnparkOnReconnect(checked) }
@@ -1430,6 +1453,7 @@ fun SettingsScreen(
                 }
                 Switch(
                     checked = autoStopDrivingModeOnDisconnect,
+                    enabled = bluetoothAutoDetectEnabled,
                     onCheckedChange = { checked ->
                         autoStopDrivingModeOnDisconnect = checked
                         scope.launch { settings.setAutoStopDrivingModeOnDisconnect(checked) }
@@ -1442,19 +1466,20 @@ fun SettingsScreen(
                 .firstOrNull { it.first == informationalTimeoutMinutes }?.second
                 ?: "$informationalTimeoutMinutes minutes"
             ExposedDropdownMenuBox(
-                expanded = informationalTimeoutMenuExpanded,
-                onExpandedChange = { informationalTimeoutMenuExpanded = it }
+                expanded = informationalTimeoutMenuExpanded && bluetoothAutoDetectEnabled,
+                onExpandedChange = { if (bluetoothAutoDetectEnabled) informationalTimeoutMenuExpanded = it }
             ) {
                 OutlinedTextField(
                     value = currentTimeoutLabel,
                     onValueChange = {},
                     readOnly = true,
+                    enabled = bluetoothAutoDetectEnabled,
                     label = { Text("Clear \"parked\" / \"unparked\" notices after") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = informationalTimeoutMenuExpanded) },
                     modifier = Modifier.menuAnchor().fillMaxWidth()
                 )
                 ExposedDropdownMenu(
-                    expanded = informationalTimeoutMenuExpanded,
+                    expanded = informationalTimeoutMenuExpanded && bluetoothAutoDetectEnabled,
                     onDismissRequest = { informationalTimeoutMenuExpanded = false }
                 ) {
                     INFORMATIONAL_TIMEOUT_PRESETS.forEach { (minutes, label) ->
