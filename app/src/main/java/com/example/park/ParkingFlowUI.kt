@@ -78,6 +78,56 @@ sealed class ParkingFlowState {
 }
 
 /**
+ * Holds the parking flow's current step AND the steps that led to it, so every step can offer
+ * "Back" to the previous choice. MapScreen uses it as a delegated property
+ * (`var parkingFlowState by navigator`), so every existing `parkingFlowState = X` line records
+ * history without being changed: Kotlin routes the assignment through [setValue].
+ *
+ * Rules: starting the flow (from Hidden) or leaving it (to Hidden) clears the history; any other
+ * step pushes the one it replaces. [back] from the first step closes the flow.
+ */
+class ParkingFlowNavigator {
+    var current: ParkingFlowState by mutableStateOf(ParkingFlowState.Hidden)
+        private set
+    private val history = mutableStateListOf<ParkingFlowState>()
+
+    /** Whether there's an earlier step to go back to (the first step shows no "Back"). */
+    val canGoBack: Boolean get() = history.isNotEmpty()
+
+    fun go(next: ParkingFlowState) {
+        when {
+            next is ParkingFlowState.Hidden || current is ParkingFlowState.Hidden -> history.clear()
+            next != current -> history.add(current)
+        }
+        current = next
+    }
+
+    fun back() {
+        current = history.removeLastOrNull() ?: ParkingFlowState.Hidden
+    }
+
+    fun cancel() = go(ParkingFlowState.Hidden)
+
+    operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): ParkingFlowState = current
+    operator fun setValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>, value: ParkingFlowState) = go(value)
+}
+
+/**
+ * The Back / Cancel row every parking-flow dialog ends with, so they all behave the same way.
+ * [onBack] null = the first step, which has nothing to go back to.
+ */
+@Composable
+fun FlowNavRow(onBack: (() -> Unit)?, onCancel: () -> Unit) {
+    Spacer(modifier = Modifier.height(8.dp))
+    androidx.compose.material3.HorizontalDivider()
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        if (onBack != null) TextButton(onClick = onBack) { Text("← Back") }
+        Spacer(modifier = Modifier.weight(1f))
+        TextButton(onClick = onCancel) { Text("Cancel") }
+    }
+}
+
+/**
  * Carries a Bluetooth-disconnect auto-detect notification's tap-through into MapScreen: the
  * car and GPS point BluetoothDisconnectReceiver captured at disconnect time, re-evaluated
  * fresh against current segment data (via proceedToMatching) rather than serialized through
@@ -85,16 +135,26 @@ sealed class ParkingFlowState {
  */
 data class PendingAutoDetect(val carId: Long, val point: LatLng)
 
+// Every parking-flow dialog: tapping outside CANCELS the flow (it used to mean "No" and move on),
+// and the dialog ends with FlowNavRow (Back, when there's a previous step, and Cancel).
+
 @Composable
-fun ParkingConfirmationDialog(match: SegmentMatch, onConfirm: () -> Unit, onReject: () -> Unit) {
+fun ParkingConfirmationDialog(
+    match: SegmentMatch,
+    onConfirm: () -> Unit,
+    onReject: () -> Unit,
+    onBack: (() -> Unit)?,
+    onCancel: () -> Unit
+) {
     AlertDialog(
-        onDismissRequest = onReject,
+        onDismissRequest = onCancel,
         title = { Text("Is this where you parked?") },
         text = {
             Column {
                 Text(match.segment.corridor, fontWeight = FontWeight.Bold)
                 Text(match.segment.limits)
                 Text("${match.segment.blockSide} side")
+                FlowNavRow(onBack, onCancel)
             }
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Yes") } },
@@ -109,15 +169,22 @@ fun ParkingConfirmationDialog(match: SegmentMatch, onConfirm: () -> Unit, onReje
  * way ParkingConfirmationDialog already does for a GPS-matched guess.
  */
 @Composable
-fun ConfirmSideDialog(segment: StreetSegment, onConfirm: () -> Unit, onReject: () -> Unit) {
+fun ConfirmSideDialog(
+    segment: StreetSegment,
+    onConfirm: () -> Unit,
+    onReject: () -> Unit,
+    onBack: (() -> Unit)?,
+    onCancel: () -> Unit
+) {
     AlertDialog(
-        onDismissRequest = onReject,
+        onDismissRequest = onCancel,
         title = { Text("Is this the correct side?") },
         text = {
             Column {
                 Text(segment.corridor, fontWeight = FontWeight.Bold)
                 Text(segment.limits)
                 Text("${segment.blockSide} side")
+                FlowNavRow(onBack, onCancel)
             }
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Yes") } },
@@ -142,11 +209,13 @@ fun QuickParkConfirmDialog(
     segment: StreetSegment,
     rejectLabel: String,
     onConfirm: (dropExactPin: Boolean) -> Unit,
-    onReject: () -> Unit
+    onReject: () -> Unit,
+    onBack: (() -> Unit)?,
+    onCancel: () -> Unit
 ) {
     var dropPin by remember { mutableStateOf(false) }
     AlertDialog(
-        onDismissRequest = onReject,
+        onDismissRequest = onCancel,
         title = { Text("Park here?") },
         text = {
             Column {
@@ -161,6 +230,7 @@ fun QuickParkConfirmDialog(
                     Checkbox(checked = dropPin, onCheckedChange = { dropPin = it })
                     Text("Drop an exact pin at my current location")
                 }
+                FlowNavRow(onBack, onCancel)
             }
         },
         confirmButton = { TextButton(onClick = { onConfirm(dropPin) }) { Text("Yes, park here") } },
@@ -173,6 +243,7 @@ fun ManualSegmentPicker(
     candidates: List<SegmentMatch>,
     onPick: (StreetSegment) -> Unit,
     onPickFromMap: () -> Unit,
+    onBack: (() -> Unit)?,
     onDismiss: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -251,9 +322,9 @@ fun ManualSegmentPicker(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 TextButton(onClick = onPickFromMap) { Text("Select from map instead") }
+                FlowNavRow(onBack, onDismiss)
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        confirmButton = {}
     )
 }

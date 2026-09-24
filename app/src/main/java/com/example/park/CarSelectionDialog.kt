@@ -34,6 +34,8 @@ fun CarSelectionDialog(cars: List<Car>, onPick: (Car) -> Unit, onAddNew: (String
                     TextButton(onClick = { addingNew = true }) {
                         Text("+ Add new car")
                     }
+                    // Always the parking flow's first step: nothing to go back to.
+                    FlowNavRow(onBack = null, onCancel = onDismiss)
                 } else {
                     OutlinedTextField(
                         value = newCarName,

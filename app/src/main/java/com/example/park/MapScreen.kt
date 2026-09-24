@@ -203,7 +203,10 @@ fun MapScreen(
     var debounceJob by remember { mutableStateOf<Job?>(null) }
     var selectedSegment by remember { mutableStateOf<StreetSegment?>(null) }
     var tapHighlightJob by remember { mutableStateOf<Job?>(null) }
-    var parkingFlowState by remember { mutableStateOf<ParkingFlowState>(ParkingFlowState.Hidden) }
+    // The navigator remembers the steps behind the current one, for "Back" (see ParkingFlowNavigator).
+    // Reading/writing parkingFlowState goes through it, so existing assignments record history as-is.
+    val parkingFlow = remember { ParkingFlowNavigator() }
+    var parkingFlowState by parkingFlow
     var activeParkedCars by remember { mutableStateOf<List<CarWithStatus>>(emptyList()) }
     var parkedBannerExpanded by remember { mutableStateOf(false) }
     // Set from the priority banner's expanded row when a car with an active meter timer is
@@ -333,6 +336,18 @@ fun MapScreen(
         closureOfferText = closureOfferSummaryFor(context, carId)
         closureOfferVisible = true
     }
+
+    // Back / Cancel for every parking-flow step. Leaving a map-tap step also has to undo what it
+    // set up: the pin-drop tap hook and the tapped-street highlight.
+    fun leaveParkingStep() {
+        pinDropCallback = null
+        tapHighlightJob?.cancel()
+        mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
+    }
+    fun parkingFlowBack() { leaveParkingStep(); parkingFlow.back() }
+    fun parkingFlowCancel() { leaveParkingStep(); parkingFlow.cancel() }
+    /** The Back action for the current step, or null on the first step (no Back button then). */
+    fun parkingFlowBackOrNull(): (() -> Unit)? = if (parkingFlow.canGoBack) ({ parkingFlowBack() }) else null
 
     // Settings-backed state. Loaded once on entry — MapScreen fully remounts when
     // navigating back from Settings (a known tradeoff of the current enum-based screen
@@ -1701,7 +1716,7 @@ fun MapScreen(
                             parkingFlowState = resolveParkingFlow(newId, state.point)
                         }
                     },
-                    onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+                    onDismiss = { parkingFlowCancel() }
                 )
             }
             is ParkingFlowState.Confirming -> if (parkingConfirmationStyle == "SIMPLE") {
@@ -1723,7 +1738,9 @@ fun MapScreen(
                             val matches = findNearbySegmentMatches(context, state.point)
                             parkingFlowState = ParkingFlowState.PickingManually(state.carId, matches, state.point)
                         }
-                    }
+                    },
+                    onBack = parkingFlowBackOrNull(),
+                    onCancel = { parkingFlowCancel() }
                 )
             } else {
                 ParkingConfirmationDialog(
@@ -1736,7 +1753,9 @@ fun MapScreen(
                             val matches = findNearbySegmentMatches(context, state.point)
                             parkingFlowState = ParkingFlowState.PickingManually(state.carId, matches, state.point)
                         }
-                    }
+                    },
+                    onBack = parkingFlowBackOrNull(),
+                    onCancel = { parkingFlowCancel() }
                 )
             }
             is ParkingFlowState.ConfirmingSide -> if (parkingConfirmationStyle == "SIMPLE") {
@@ -1759,7 +1778,9 @@ fun MapScreen(
                         tapHighlightJob?.cancel()
                         mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
                         parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
-                    }
+                    },
+                    onBack = parkingFlowBackOrNull(),
+                    onCancel = { parkingFlowCancel() }
                 )
             } else {
                 ConfirmSideDialog(
@@ -1776,7 +1797,9 @@ fun MapScreen(
                         tapHighlightJob?.cancel()
                         mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
                         parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
-                    }
+                    },
+                    onBack = parkingFlowBackOrNull(),
+                    onCancel = { parkingFlowCancel() }
                 )
             }
             is ParkingFlowState.AskingForPin -> {
@@ -1788,7 +1811,7 @@ fun MapScreen(
                     meterMatch = findConfidentMeteredMatch(context, state.point)
                 }
                 AlertDialog(
-                    onDismissRequest = { /* require an explicit choice */ },
+                    onDismissRequest = { parkingFlowCancel() }, // tapping outside cancels, like every flow step
                     title = { Text("Add an exact pin?") },
                     text = {
                         Column {
@@ -1817,6 +1840,7 @@ fun MapScreen(
                                     parkingFlowState = ParkingFlowState.AskingForMeterTimer(state.carId, state.segment, state.point, meter)
                                 }) { Text("Set a meter timer?") }
                             }
+                            FlowNavRow(parkingFlowBackOrNull(), onCancel = { parkingFlowCancel() })
                         }
                     },
                     confirmButton = {},
@@ -1838,7 +1862,7 @@ fun MapScreen(
                 }
 
                 AlertDialog(
-                    onDismissRequest = { /* require an explicit choice */ },
+                    onDismissRequest = { parkingFlowCancel() }, // tapping outside cancels (nothing saved yet)
                     title = { Text("Set a meter timer?") },
                     text = {
                         Column {
@@ -1865,6 +1889,7 @@ fun MapScreen(
                                     Text("Set")
                                 }
                             }
+                            FlowNavRow(parkingFlowBackOrNull(), onCancel = { parkingFlowCancel() })
                         }
                     },
                     confirmButton = {},
@@ -1901,6 +1926,7 @@ fun MapScreen(
                     }
                 }
                 MapInstructionBanner(text = "Tap the map to drop your pin")
+                BottomCancelPill(onCancel = { parkingFlowCancel() }, onBack = parkingFlowBackOrNull())
             }
             is ParkingFlowState.PickingManually -> ManualSegmentPicker(
                 candidates = state.candidates,
@@ -1913,10 +1939,11 @@ fun MapScreen(
                 onPickFromMap = {
                     parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
                 },
-                onDismiss = { parkingFlowState = ParkingFlowState.Hidden }
+                onBack = parkingFlowBackOrNull(),
+                onDismiss = { parkingFlowCancel() }
             )
             is ParkingFlowState.NoStreetNearby -> AlertDialog(
-                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                onDismissRequest = { parkingFlowCancel() },
                 title = { Text("No nearby streets found") },
                 text = {
                     Column {
@@ -1934,19 +1961,22 @@ fun MapScreen(
                             // already offers, rather than assuming this really is unmanaged.
                             parkingFlowState = ParkingFlowState.PickingViaMap(state.carId, state.point)
                         }) { Text("Select from map instead") }
+                        FlowNavRow(parkingFlowBackOrNull(), onCancel = { parkingFlowCancel() })
                     }
                 },
-                confirmButton = {},
-                dismissButton = { TextButton(onClick = { parkingFlowState = ParkingFlowState.Hidden }) { Text("Cancel") } }
+                confirmButton = {}
             )
             is ParkingFlowState.ConfirmingSafeLocation -> AlertDialog(
-                onDismissRequest = { parkingFlowState = ParkingFlowState.Hidden },
+                onDismissRequest = { parkingFlowCancel() },
                 title = { Text("Park at ${state.location.name}?") },
                 text = {
-                    Text(
-                        "Did you park at “${state.location.name}” and not on a street-cleaning " +
-                                "segment — like a garage or driveway?"
-                    )
+                    Column {
+                        Text(
+                            "Did you park at “${state.location.name}” and not on a street-cleaning " +
+                                    "segment — like a garage or driveway?"
+                        )
+                        FlowNavRow(parkingFlowBackOrNull(), onCancel = { parkingFlowCancel() })
+                    }
                 },
                 confirmButton = {
                     TextButton(onClick = {
@@ -1966,7 +1996,7 @@ fun MapScreen(
             )
             is ParkingFlowState.PickingViaMap -> {
                 MapInstructionBanner(text = "Tap a street on the map to select it")
-                BottomCancelPill(onCancel = { parkingFlowState = ParkingFlowState.Hidden })
+                BottomCancelPill(onCancel = { parkingFlowCancel() }, onBack = parkingFlowBackOrNull())
             }
             ParkingFlowState.Hidden -> {}
         }
@@ -2064,16 +2094,27 @@ private fun BoxScope.ClosureOfferCard(visible: Boolean, summary: String, onTurnO
  * MapInstructionBanner at the top of the screen: putting a cancel affordance inside/under that
  * banner (an earlier version of this did) either got lost against the instruction text or
  * ballooned the banner into a big rectangle to fit a 48dp touch target — a standalone pill
- * avoids both.
+ * avoids both. [onBack], when given (a parking-flow step with a previous step), adds a second
+ * "Back" pill to its left, the map-tap equivalent of a dialog's Back button.
  */
 @Composable
-private fun BoxScope.BottomCancelPill(onCancel: () -> Unit) {
-    Surface(
-        onClick = onCancel,
+private fun BoxScope.BottomCancelPill(onCancel: () -> Unit, onBack: (() -> Unit)? = null) {
+    Row(
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .navigationBarsPadding()
-            .padding(bottom = 88.dp), // clears the "Parked" button (bottom = 24.dp) stacked below it
+            .padding(bottom = 88.dp) // clears the "Parked" button (bottom = 24.dp) stacked below it
+    ) {
+        if (onBack != null) BottomPill(text = "← Back", icon = null, onClick = onBack)
+        BottomPill(text = "Cancel", icon = Icons.Filled.Close, onClick = onCancel)
+    }
+}
+
+@Composable
+private fun BottomPill(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = 3.dp
@@ -2082,13 +2123,11 @@ private fun BoxScope.BottomCancelPill(onCancel: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text("Cancel", style = MaterialTheme.typography.labelLarge)
+            if (icon != null) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(text, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
