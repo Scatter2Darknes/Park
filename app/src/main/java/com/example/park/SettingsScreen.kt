@@ -1262,6 +1262,17 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // The citywide map layer needs this switch (closureMapLayerOn), so say what turning it
+                // off hides; otherwise closures just vanish from the map with no reason given.
+                // With the park-time check off too, loadClosureBlocksForMap draws nothing at all.
+                if (!closureBackgroundSync && showClosuresLayer) {
+                    Text(
+                        if (closureParkTimeCheck) "While this is off, the map only shows closures on or near your parked cars."
+                        else "While this and the park check are off, the map shows no closures.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Switch(
                 checked = closureBackgroundSync,
