@@ -1744,8 +1744,6 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    // Before the padding, so the bar sits in the 12 dp right margin rather than over the text.
-                    .verticalScrollbar(scrollState, MaterialTheme.colorScheme.onSurfaceVariant)
                     .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
                     .verticalScroll(scrollState)
             ) {
