@@ -3,6 +3,7 @@ package com.example.park
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -288,7 +289,9 @@ fun ManualSegmentPicker(
                     Column(
                         modifier = Modifier
                             .weight(1f)
+                            .verticalScrollbar(scrollState, MaterialTheme.colorScheme.onSurfaceVariant) // "more below" hint
                             .verticalScroll(scrollState)
+                            .padding(end = 10.dp)
                     ) {
                         if (candidates.isEmpty()) {
                             Text("No nearby streets found in our data.")

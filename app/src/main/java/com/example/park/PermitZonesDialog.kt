@@ -30,7 +30,14 @@ fun PermitZonesDialog(
         onDismissRequest = onDismiss,
         title = { Text("${car.name}'s RPP Zones") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScrollbar(scrollState, MaterialTheme.colorScheme.onSurfaceVariant) // "more below" hint
+                    .verticalScroll(scrollState)
+                    .padding(end = 10.dp) // room for the bar
+            ) {
                 Text(
                     "Zones this car holds a residential parking permit for — posted " +
                             "blocks in these zones won't show a non-permit time-limit warning.",

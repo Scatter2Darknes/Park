@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -63,7 +64,14 @@ class MainActivity : ComponentActivity() {
                     onDismissRequest = {}, // requires an explicit tap, so it can't be swiped away and lost
                     title = { Text("Park crashed last time") },
                     text = {
-                        Box(modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                        val logScroll = rememberScrollState()
+                        Box(
+                            modifier = Modifier
+                                .heightIn(max = 300.dp)
+                                .verticalScrollbar(logScroll, MaterialTheme.colorScheme.onSurfaceVariant)
+                                .verticalScroll(logScroll)
+                                .padding(end = 10.dp)
+                        ) {
                             Text(log, style = MaterialTheme.typography.bodySmall)
                         }
                     },

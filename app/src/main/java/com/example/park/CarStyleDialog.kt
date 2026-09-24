@@ -76,7 +76,14 @@ fun CarStyleDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit ${car.name}") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScrollbar(scrollState, MaterialTheme.colorScheme.onSurfaceVariant) // "more below" hint
+                    .verticalScroll(scrollState)
+                    .padding(end = 10.dp) // room for the bar
+            ) {
                 OutlinedTextField(
                     value = editedName,
                     onValueChange = { editedName = it },

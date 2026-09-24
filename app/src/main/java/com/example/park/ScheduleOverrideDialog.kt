@@ -52,7 +52,13 @@ fun ScheduleOverrideDialog(
         onDismissRequest = onDismiss,
         title = { Text("Correct this street's schedule") },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .verticalScrollbar(scrollState, MaterialTheme.colorScheme.onSurfaceVariant) // "more below" hint
+                    .verticalScroll(scrollState)
+                    .padding(end = 10.dp) // room for the bar
+            ) {
                 Text(
                     "If the posted sign on ${segment.corridor} (${segment.limits}) doesn't " +
                             "match what's shown, fix it here. This only changes what your device " +
