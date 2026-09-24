@@ -302,6 +302,26 @@ fun MapScreen(
         enqueueWidgetRefresh(context)
     }
 
+    // The one-time "keep checking for street closures in the background?" offer (Tier 2, spec §1).
+    var showClosureTier2Offer by remember { mutableStateOf(false) }
+
+    /**
+     * Every MANUAL park in the flow below ends here, after its save: redraw the parked-car markers
+     * and the banner, close the flow, and — the first time only — offer Tier 2 background closure
+     * checks. Bluetooth auto-parks never come through here (no screen to show the offer on), so they
+     * don't use it up. "Shown" is recorded as the offer appears, so it can't reappear either way.
+     */
+    suspend fun finishManualPark() {
+        mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
+        refreshActiveParkedCars()
+        parkingFlowState = ParkingFlowState.Hidden
+        val settings = SettingsRepository(context)
+        if (!settings.closureTier2OfferShown.first() && !settings.closureBackgroundSync.first()) {
+            settings.setClosureTier2OfferShown()
+            showClosureTier2Offer = true
+        }
+    }
+
     // Settings-backed state. Loaded once on entry — MapScreen fully remounts when
     // navigating back from Settings (a known tradeoff of the current enum-based screen
     // switching), so a fresh load here is sufficient to pick up any changes made there.
@@ -1633,6 +1653,33 @@ fun MapScreen(
                 onPendingSaveLocationConsumed()
             })
         }
+        if (showClosureTier2Offer) {
+            AlertDialog(
+                onDismissRequest = { showClosureTier2Offer = false },
+                title = { Text("Keep checking for street closures?") },
+                text = {
+                    Text(
+                        "Park can re-check for street closures around your parked car in the " +
+                                "background every $CLOSURE_BACKGROUND_SYNC_HOURS hours, so a closure " +
+                                "permitted after you park still gets you an alert. It downloads the " +
+                                "citywide list (your location is never sent) and follows your " +
+                                "Wi-Fi-only setting. You can change this anytime in Settings → Data & Sync."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showClosureTier2Offer = false
+                        scope.launch {
+                            SettingsRepository(context).setClosureBackgroundSync(true)
+                            applyClosureSyncSchedule(context, androidx.work.ExistingPeriodicWorkPolicy.REPLACE)
+                        }
+                    }) { Text("Turn on") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClosureTier2Offer = false }) { Text("Not now") }
+                }
+            )
+        }
         when (val state = parkingFlowState) {
             is ParkingFlowState.ChoosingCar -> {
                 var cars by remember { mutableStateOf<List<Car>>(emptyList()) }
@@ -1664,9 +1711,7 @@ fun MapScreen(
                             } else {
                                 saveParkedState(context, state.carId, state.match.segment, state.point)
                             }
-                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                            refreshActiveParkedCars()
-                            parkingFlowState = ParkingFlowState.Hidden
+                            finishManualPark()
                         }
                     },
                     onReject = {
@@ -1703,9 +1748,7 @@ fun MapScreen(
                             } else {
                                 saveParkedState(context, state.carId, state.segment, state.point)
                             }
-                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                            refreshActiveParkedCars()
-                            parkingFlowState = ParkingFlowState.Hidden
+                            finishManualPark()
                         }
                     },
                     onReject = {
@@ -1750,9 +1793,7 @@ fun MapScreen(
                             TextButton(onClick = {
                                 scope.launch {
                                     saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
-                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                    refreshActiveParkedCars()
-                                    parkingFlowState = ParkingFlowState.Hidden
+                                    finishManualPark()
                                 }
                             }) { Text("Yes, pin my current location") }
                             TextButton(onClick = {
@@ -1761,9 +1802,7 @@ fun MapScreen(
                             TextButton(onClick = {
                                 scope.launch {
                                     saveParkedState(context, state.carId, state.segment, state.point)
-                                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                    refreshActiveParkedCars()
-                                    parkingFlowState = ParkingFlowState.Hidden
+                                    finishManualPark()
                                 }
                             }) { Text("No, just highlight street") }
                             meterMatch?.let { meter ->
@@ -1791,9 +1830,7 @@ fun MapScreen(
                         val meterLabel = state.meter.streetName?.let { "the meter on $it" } ?: "the meter"
                         scheduleMeterTimer(context, state.carId, carName, meterLabel, System.currentTimeMillis() + minutes * 60_000L)
                     }
-                    mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                    refreshActiveParkedCars()
-                    parkingFlowState = ParkingFlowState.Hidden
+                    finishManualPark()
                 }
 
                 AlertDialog(
@@ -1854,9 +1891,7 @@ fun MapScreen(
                                     context, state.carId, state.segment, state.originalPoint,
                                     tappedPoint.latitude, tappedPoint.longitude
                                 )
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
+                                finishManualPark()
                             }
                         }
                     }
@@ -1886,9 +1921,7 @@ fun MapScreen(
                         TextButton(onClick = {
                             scope.launch {
                                 saveUnmanagedParkedState(context, state.carId, state.point)
-                                mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                                refreshActiveParkedCars()
-                                parkingFlowState = ParkingFlowState.Hidden
+                                finishManualPark()
                             }
                         }) { Text("Not a street cleaning risk spot") }
                         TextButton(onClick = {
@@ -1915,9 +1948,7 @@ fun MapScreen(
                     TextButton(onClick = {
                         scope.launch {
                             saveUnmanagedParkedState(context, state.carId, state.point, viaSafeLocationId = state.location.id)
-                            mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
-                            refreshActiveParkedCars()
-                            parkingFlowState = ParkingFlowState.Hidden
+                            finishManualPark()
                         }
                     }) { Text("Yes") }
                 },

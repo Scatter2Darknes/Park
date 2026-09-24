@@ -137,6 +137,13 @@ fun SettingsScreen(
     var urgentOffsetMenuExpanded by remember { mutableStateOf(false) }
     var informationalTimeoutMinutes by remember { mutableStateOf(SettingsDefaults.INFORMATIONAL_NOTIFICATION_TIMEOUT_MINUTES) }
     var informationalTimeoutMenuExpanded by remember { mutableStateOf(false) }
+    var closureParkTimeCheck by remember { mutableStateOf(SettingsDefaults.CLOSURE_PARK_TIME_CHECK) }
+    var closureBackgroundSync by remember { mutableStateOf(SettingsDefaults.CLOSURE_BACKGROUND_SYNC) }
+    var closureAlertLeadHours by remember { mutableStateOf(SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS) }
+    var closureLeadMenuExpanded by remember { mutableStateOf(false) }
+    var closuresLastSyncMillis by remember { mutableStateOf<Long?>(null) }
+    var closureCheckRunning by remember { mutableStateOf(false) }
+    var closureCheckMessage by remember { mutableStateOf<String?>(null) }
 
     suspend fun reloadAllSettings() {
         alwaysAskCar = settings.alwaysAskCar.first()
@@ -170,6 +177,10 @@ fun SettingsScreen(
         lastRefreshMillis = settings.lastRefreshMillis.first()
         stadiaApiKeyOverride = settings.stadiaApiKeyOverride.first()
         dataSfAppTokenOverride = settings.dataSfAppTokenOverride.first()
+        closureParkTimeCheck = settings.closureParkTimeCheck.first()
+        closureBackgroundSync = settings.closureBackgroundSync.first()
+        closureAlertLeadHours = settings.closureAlertLeadHours.first()
+        closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
     }
 
     LaunchedEffect(Unit) {
@@ -423,6 +434,50 @@ fun SettingsScreen(
                             }
                         )
                     }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Text("Street-closure alerts", style = MaterialTheme.typography.labelMedium)
+        DescriptionToggle(
+            "How early you hear about a street closure affecting your parked car: a closure on " +
+                    "your block (you may not be able to drive out), or one nearby when you park. " +
+                    "A closure that's already closer than this is announced right away. Turn the " +
+                    "closure checks themselves on or off in Data & Sync."
+        )
+        Spacer(Modifier.height(8.dp))
+        val currentClosureLeadLabel = CLOSURE_LEAD_PRESETS.firstOrNull { it.first == closureAlertLeadHours }?.second
+            ?: "$closureAlertLeadHours hours before"
+        ExposedDropdownMenuBox(
+            expanded = closureLeadMenuExpanded,
+            onExpandedChange = { closureLeadMenuExpanded = it }
+        ) {
+            OutlinedTextField(
+                value = currentClosureLeadLabel,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Tell me") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = closureLeadMenuExpanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(
+                expanded = closureLeadMenuExpanded,
+                onDismissRequest = { closureLeadMenuExpanded = false }
+            ) {
+                CLOSURE_LEAD_PRESETS.forEach { (hours, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            closureAlertLeadHours = hours
+                            closureLeadMenuExpanded = false
+                            scope.launch {
+                                settings.setClosureAlertLeadHours(hours)
+                                rescheduleAllActiveReminders(context)
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -1066,6 +1121,8 @@ fun SettingsScreen(
                             context, refreshIntervalHours.toLong(), ExistingPeriodicWorkPolicy.REPLACE,
                             wifiOnly = checked
                         )
+                        // The background street-closure job honours the same setting.
+                        applyClosureSyncSchedule(context, ExistingPeriodicWorkPolicy.REPLACE)
                     }
                 }
             )
@@ -1125,6 +1182,95 @@ fun SettingsScreen(
                     "what's shown here, trust the sign \u2014 tap the block on the map and use " +
                     "\"Doesn't match the sign? Fix it\" to correct that block specifically."
         )
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
+        SectionLabel("Street closures")
+        DescriptionToggle(
+            "Temporary street closures permitted by SFMTA (events, construction, Shared Spaces). " +
+                    "Park downloads the whole city's list and matches it on your phone, so your " +
+                    "location is never sent anywhere. A closure is not a ticket risk: it can only " +
+                    "mean you may not be able to drive out for a while."
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Check for closures when I park")
+                Text(
+                    "Right after each park. Uses mobile data if that's what you're on.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = closureParkTimeCheck,
+                onCheckedChange = { checked ->
+                    closureParkTimeCheck = checked
+                    scope.launch {
+                        settings.setClosureParkTimeCheck(checked)
+                        rescheduleAllActiveReminders(context) // both off: drops closure alerts
+                    }
+                }
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Keep checking in the background")
+                Text(
+                    "Re-checks every $CLOSURE_BACKGROUND_SYNC_HOURS hours, so a closure permitted after " +
+                            "you park still reaches you. Follows “Wi-Fi only” above.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = closureBackgroundSync,
+                onCheckedChange = { checked ->
+                    closureBackgroundSync = checked
+                    scope.launch {
+                        settings.setClosureBackgroundSync(checked)
+                        settings.setClosureTier2OfferShown() // decided here, so the one-time offer never needs to ask
+                        applyClosureSyncSchedule(context, ExistingPeriodicWorkPolicy.REPLACE)
+                        rescheduleAllActiveReminders(context)
+                    }
+                }
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        val closuresCheckedText = closuresLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
+        Text("Closures last checked: $closuresCheckedText", style = MaterialTheme.typography.bodySmall)
+        if (closureParkTimeCheck || closureBackgroundSync) {
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    closureCheckRunning = true
+                    closureCheckMessage = null
+                    scope.launch {
+                        closureCheckMessage = try {
+                            val count = StreetClosureRepository(context).refreshFromNetwork()
+                            refreshParkedSchedulesAfterSync(context)
+                            "Checked: $count upcoming closures citywide."
+                        } catch (e: Exception) {
+                            "Couldn't check: ${e.message}"
+                        }
+                        closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
+                        closureCheckRunning = false
+                    }
+                },
+                enabled = !closureCheckRunning
+            ) { Text(if (closureCheckRunning) "Checking…" else "Check Closures Now") }
+            closureCheckMessage?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
     @Composable
     fun BluetoothBackgroundSection() {
