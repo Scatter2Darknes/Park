@@ -148,7 +148,7 @@ fun LocationStyleDialog(
                     Text("Color", style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(4.dp))
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.horizontalScrollWithBar(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         CAR_COLOR_PALETTE.forEach { hex ->
@@ -164,7 +164,7 @@ fun LocationStyleDialog(
                     Text("Icon", style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(4.dp))
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.horizontalScrollWithBar(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         LOCATION_ICON_PALETTE.forEach { emoji ->

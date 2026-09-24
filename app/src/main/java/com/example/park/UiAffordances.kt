@@ -1,6 +1,9 @@
 package com.example.park
 
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.composed
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -88,4 +91,38 @@ fun Modifier.verticalScrollbar(
     val thumbHeight = (viewport * viewport / (viewport + maxScroll)).coerceAtLeast(minThumbHeight.toPx()).coerceAtMost(viewport)
     val thumbTop = (viewport - thumbHeight) * state.value / maxScroll
     drawRoundRect(color.copy(alpha = 0.6f), topLeft = Offset(x, thumbTop), size = Size(barWidth, thumbHeight), cornerRadius = radius)
+}
+
+/** [verticalScrollbar] turned sideways: a bar along the BOTTOM edge of a horizontally scrolling row.
+ *  Same rule: put it before `.horizontalScroll(state)`, and pad the content's bottom so the bar is clear of it. */
+fun Modifier.horizontalScrollbar(
+    state: ScrollState,
+    color: Color,
+    height: Dp = 3.dp,
+    minThumbWidth: Dp = 24.dp
+): Modifier = drawWithContent {
+    drawContent()
+    val maxScroll = state.maxValue
+    if (maxScroll <= 0 || maxScroll == Int.MAX_VALUE) return@drawWithContent
+    val viewport = size.width
+    val barHeight = height.toPx()
+    val y = size.height - barHeight
+    val radius = CornerRadius(barHeight / 2)
+    drawRoundRect(color.copy(alpha = 0.15f), topLeft = Offset(0f, y), size = Size(viewport, barHeight), cornerRadius = radius)
+    val thumbWidth = (viewport * viewport / (viewport + maxScroll)).coerceAtLeast(minThumbWidth.toPx()).coerceAtMost(viewport)
+    val thumbLeft = (viewport - thumbWidth) * state.value / maxScroll
+    drawRoundRect(color.copy(alpha = 0.6f), topLeft = Offset(thumbLeft, y), size = Size(thumbWidth, barHeight), cornerRadius = radius)
+}
+
+/**
+ * A sideways-scrolling row with its bar, in one call: replaces `Modifier.horizontalScroll(rememberScrollState())`
+ * for the colour and icon pickers, where swatches past the right edge were easy to miss.
+ * `composed` lets a Modifier remember its own scroll state and read the theme, like a small composable.
+ */
+fun Modifier.horizontalScrollWithBar(): Modifier = composed {
+    val state = rememberScrollState()
+    this
+        .horizontalScrollbar(state, MaterialTheme.colorScheme.onSurfaceVariant)
+        .horizontalScroll(state)
+        .padding(bottom = 8.dp) // room for the bar under the swatches
 }

@@ -123,7 +123,7 @@ fun CarStyleDialog(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.horizontalScrollWithBar(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     CAR_COLOR_PALETTE.forEach { hex ->
@@ -141,7 +141,7 @@ fun CarStyleDialog(
                     Text("Icon", style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.height(4.dp))
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        modifier = Modifier.horizontalScrollWithBar(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         CAR_ICON_PALETTE.forEach { emoji ->
@@ -171,7 +171,7 @@ fun CarStyleDialog(
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.horizontalScrollWithBar(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     WIDGET_TEXT_COLOR_PALETTE.forEach { hex ->

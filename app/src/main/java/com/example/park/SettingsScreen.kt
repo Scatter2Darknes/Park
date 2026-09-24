@@ -1927,7 +1927,7 @@ private fun StatusColorRow(label: String, selectedHex: String, onSelect: (String
         Text(label, style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.height(4.dp))
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            modifier = Modifier.horizontalScrollWithBar(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SWEEP_STATUS_COLOR_PALETTE.forEach { hex ->
