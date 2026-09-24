@@ -223,10 +223,42 @@ val MIGRATION_18_19 = Migration(18, 19) { db ->
     db.execSQL("ALTER TABLE parked_state ADD COLUMN meterTimerAtMillis INTEGER")
 }
 
+/**
+ * v19 -> v20: adds the street_closure table (SFMTA temporary street closures — see StreetClosure.kt
+ * and docs/park-closures-spec.md). A new, empty table: the next closure sync fills it, and no
+ * existing table changes. Indexed on cnn (matching a parked car's block) and endMillis (time pruning
+ * and the "not over yet" filter every query uses).
+ */
+val MIGRATION_19_20 = Migration(19, 20) { db ->
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS street_closure (
+            objectId TEXT NOT NULL PRIMARY KEY,
+            caseNum TEXT,
+            caseName TEXT,
+            type TEXT,
+            cnn TEXT NOT NULL,
+            street TEXT,
+            fromStreet TEXT,
+            toStreet TEXT,
+            vehicleImpact TEXT,
+            startMillis INTEGER NOT NULL,
+            endMillis INTEGER NOT NULL,
+            points TEXT NOT NULL,
+            centroidLat REAL NOT NULL,
+            centroidLng REAL NOT NULL,
+            lastSeenSyncId INTEGER
+        )
+        """.trimIndent()
+    )
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_street_closure_cnn ON street_closure (cnn)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_street_closure_endMillis ON street_closure (endMillis)")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-    MIGRATION_17_18, MIGRATION_18_19
+    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20
 )
 
 /*

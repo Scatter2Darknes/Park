@@ -122,6 +122,18 @@ suspend fun pruneStaleRppRegulations(context: Context, syncId: Long, existingCou
     )
 }
 
+/** Street-closure counterpart of [pruneStaleStreetSegments]. This removes closures that vanished
+ *  from the feed (cancelled or withdrawn); ENDED closures are removed separately by time
+ *  (StreetClosureDao.deleteEndedBy), which needs no guard. */
+suspend fun pruneStaleStreetClosures(context: Context, syncId: Long, existingCount: Int, fetch: FeedFetch) {
+    pruneIfSafe(
+        "closure", existingCount, fetch,
+        deleteUnseen = { AppDatabase.getInstance(context).streetClosureDao().deleteNotSeenSince(syncId) },
+        warn = { android.util.Log.w("ClosureSync", it) },
+        info = { android.util.Log.d("ClosureSync", it) }
+    )
+}
+
 /** Metered-zone counterpart of [pruneStaleStreetSegments]. [fetch] is the meter LOCATION fetch
  *  specifically (see MeteredZoneRepository) — the reliable half this app's own reachability
  *  determines completeness from, independent of whether the schedule half also succeeded. */

@@ -21,7 +21,15 @@ suspend fun fetchSweepingTotal(context: Context): Int =
 internal fun parseSocrataCount(json: String): Int? =
     JSONArray(json).optJSONObject(0)?.optString("count")?.toIntOrNull()
 
-private suspend fun fetchSweepingQuery(context: Context, query: String, what: String): String {
+private suspend fun fetchSweepingQuery(context: Context, query: String, what: String): String =
+    dataSfGet(context, "yhqp-riqs", query, what)
+
+/**
+ * One GET against a data.sf.gov Socrata dataset ([datasetId], e.g. "yhqp-riqs"), with the
+ * certificate workaround and app token every data.sf.gov request needs. [query] is the already
+ * URL-encoded query string. Not private: StreetClosureApi.kt uses it for the closures feed.
+ */
+internal suspend fun dataSfGet(context: Context, datasetId: String, query: String, what: String): String {
     return withContext(Dispatchers.IO) {
         // data.sf.gov, not data.sfgov.org \u2014 the site has moved to the newer domain, and
         // connecting directly to it (rather than relying on a possible redirect from the old
@@ -29,7 +37,7 @@ private suspend fun fetchSweepingQuery(context: Context, query: String, what: St
         // handshake is the SAME one DataSfTrustConfig's bundled intermediate was matched
         // against. SNI/certificate selection happens against whichever hostname is dialed
         // first, before any HTTP-level redirect is even seen.
-        val url = URL("https://data.sf.gov/resource/yhqp-riqs.json?$query")
+        val url = URL("https://data.sf.gov/resource/$datasetId.json?$query")
         val connection = url.openConnection() as HttpURLConnection
         if (connection is HttpsURLConnection) {
             // See DataSfTrustConfig's class doc \u2014 works around data.sf.gov not sending

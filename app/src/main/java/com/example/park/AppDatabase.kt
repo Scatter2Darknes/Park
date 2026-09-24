@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.first
 import java.time.ZoneId
 
 @Database(
-    entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class, MeteredZone::class],
-    version = 19,
+    entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class, MeteredZone::class, StreetClosure::class],
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -22,6 +22,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun scheduleOverrideDao(): ScheduleOverrideDao
     abstract fun rppZoneRegulationDao(): RppZoneRegulationDao
     abstract fun meteredZoneDao(): MeteredZoneDao
+    abstract fun streetClosureDao(): StreetClosureDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null

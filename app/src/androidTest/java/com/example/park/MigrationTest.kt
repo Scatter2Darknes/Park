@@ -167,6 +167,42 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate19To20_keepsParkedRow_andCreatesAnEmptyClosureTable() {
+        helper.createDatabase(TEST_DB, 19).apply {
+            execSQL(
+                """
+                INSERT INTO parked_state
+                    (id, carId, segmentBlockSweepId, sideConfirmed, parkedLat, parkedLng,
+                     parkedAtMillis, nextSweepAtMillis, notificationScheduled, meterTimerAtMillis)
+                VALUES
+                    (1, 42, 'block-123', 1, 37.7749, -122.4194, 1000000, 2000000, 1, 3000000)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        // Also validates street_closure's columns and both indices against schemas/20.json.
+        val db = helper.runMigrationsAndValidate(TEST_DB, 20, true, MIGRATION_19_20)
+
+        db.query("SELECT carId, meterTimerAtMillis FROM parked_state").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(42L, c.getLong(0))
+            assertEquals(3000000L, c.getLong(1))
+            assertEquals(1, c.count)
+        }
+        db.query("SELECT COUNT(*) FROM street_closure").use { c ->
+            assertTrue(c.moveToFirst()); assertEquals(0, c.getInt(0))
+        }
+        db.execSQL(
+            """
+            INSERT INTO street_closure
+                (objectId, cnn, startMillis, endMillis, points, centroidLat, centroidLng)
+            VALUES ('35303', '10404000', 1, 2, '[]', 0.0, 0.0)
+            """.trimIndent()
+        )
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }
