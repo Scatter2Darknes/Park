@@ -50,6 +50,10 @@ Rules:
   this update ships, never again. **(corrected)** A Bluetooth auto-park has no screen to show it
   on, so it doesn't count and doesn't consume the offer. It should name the concrete payoff: background tow/closure checks and
   upcoming closures on the map. Record "shown" in settings so it can't reappear.
+  **Decided (owner, 2026-09-23):** a card on the map, not a dialog. A dialog straight after the
+  parking dialogs was easy to tap away unread. The card has its own colour, an icon, a line about the
+  user's own spot (distinct closures within ~2 blocks this week), a filled "Turn on" button and no
+  outside-tap dismiss. "Shown" is recorded once it is actually on screen.
 
 ### How restrictions plug in **(corrected)**
 The original plan assumed a shared curb-level earliest-deadline merge that sweep, RPP and meter all
