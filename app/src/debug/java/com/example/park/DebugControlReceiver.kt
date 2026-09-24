@@ -75,6 +75,11 @@ class DebugControlReceiver : BroadcastReceiver() {
                         durationMinutes = intent.getIntExtra("durationMinutes", 12 * 60)
                     )
                     ACTION_CLEAR_DEBUG_CLOSURES -> clearDebugClosures(app)
+                    ACTION_RESET_NOTIFICATION_ASK -> {
+                        SettingsRepository(app).resetNotificationPermissionAsked()
+                        Log.i(TAG, "RESET_NOTIFICATION_ASK: the next manual park asks for notification permission again " +
+                                "(if it isn't granted; revoke it with `pm revoke com.example.park android.permission.POST_NOTIFICATIONS`)")
+                    }
                     ACTION_INJECT_TOW -> injectTow(
                         app, carId,
                         startInMinutes = intent.getIntExtra("startInMinutes", 3 * 24 * 60),
@@ -374,6 +379,7 @@ class DebugControlReceiver : BroadcastReceiver() {
         const val ACTION_CLEAR_DEBUG_CLOSURES = "com.example.park.debug.CLEAR_DEBUG_CLOSURES"
         const val ACTION_RESET_CLOSURE_OFFER = "com.example.park.debug.RESET_CLOSURE_OFFER"
         const val ACTION_INJECT_TOW = "com.example.park.debug.INJECT_TOW"
+        const val ACTION_RESET_NOTIFICATION_ASK = "com.example.park.debug.RESET_NOTIFICATION_ASK"
         const val ACTION_CLEAR_DEBUG_TOW = "com.example.park.debug.CLEAR_DEBUG_TOW"
     }
 }

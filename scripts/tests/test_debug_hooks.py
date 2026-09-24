@@ -187,7 +187,8 @@ class HooksTest(unittest.TestCase):
         for action in (lambda: debug_hooks.park(phone, 1, 37.78, -122.46), lambda: debug_hooks.unpark(phone, 1), lambda: debug_hooks.rearm(phone),
                        lambda: debug_hooks.inject_closure(phone, 1, "blocked", 10, 60), lambda: debug_hooks.clear_closures(phone),
                        lambda: debug_hooks.reset_closure_offer(phone),
-                       lambda: debug_hooks.inject_tow(phone, 1, 10, 60, 1), lambda: debug_hooks.clear_tow(phone)):
+                       lambda: debug_hooks.inject_tow(phone, 1, 10, 60, 1), lambda: debug_hooks.clear_tow(phone),
+                       lambda: debug_hooks.reset_notification_ask(phone)):
             with self.assertRaises(ScriptError) as ctx:
                 action()
             self.assertIn("only runs on an emulator", str(ctx.exception))

@@ -174,6 +174,12 @@ def clear_tow(adb: Adb) -> List[str]:
     return call(adb, "CLEAR_DEBUG_TOW", "CLEAR_DEBUG_TOW")
 
 
+def reset_notification_ask(adb: Adb) -> List[str]:
+    """Let the one-time 'Get parking reminders?' ask show again after the next manual park (if not granted)."""
+    require_emulator(adb, "reset-notification-ask")
+    return call(adb, "RESET_NOTIFICATION_ASK", "RESET_NOTIFICATION_ASK")
+
+
 def reset_closure_offer(adb: Adb) -> List[str]:
     """Make the one-time 'keep checking for closures in the background?' offer show again after the next manual park."""
     require_emulator(adb, "reset-closure-offer")
@@ -216,6 +222,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="also pretend the city's tow feed is this many days old (tests the out-of-date warning)")
     sub.add_parser("clear-tow", help="remove every fake tow zone and re-arm (emulator only)")
     sub.add_parser("reset-closure-offer", help="let the one-time background closure offer show again (emulator only)")
+    sub.add_parser("reset-notification-ask", help="let the first-park notification-permission ask show again (emulator only)")
     args = parser.parse_args(argv)
 
     try:
@@ -236,6 +243,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             lines = clear_tow(adb)
         elif args.command == "reset-closure-offer":
             lines = reset_closure_offer(adb)
+        elif args.command == "reset-notification-ask":
+            lines = reset_notification_ask(adb)
         else:
             lines = rearm(adb)
     except ScriptError as exc:

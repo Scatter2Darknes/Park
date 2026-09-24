@@ -89,6 +89,7 @@ python scripts\debug_hooks.py rearm                                       # the 
 python scripts\debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885   # fake street closure; alert in ~5 min
 python scripts\debug_hooks.py clear-closures                              # remove every fake closure, re-arm
 python scripts\debug_hooks.py reset-closure-offer                         # show the one-time background-sync offer again
+python scripts\debug_hooks.py reset-notification-ask                      # let the first-park "Get parking reminders?" ask show again
 python scripts\debug_hooks.py inject-tow --car-id 1 --start-in-minutes 2885                      # fake tow zone; advance alert in ~5 min
 python scripts\debug_hooks.py inject-tow --car-id 1 --start-in-minutes 90 --feed-age-days 60     # plus "city tow data out of date"
 python scripts\debug_hooks.py clear-tow                                   # remove every fake tow zone, re-arm

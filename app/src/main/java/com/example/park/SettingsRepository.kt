@@ -45,6 +45,7 @@ object SettingsKeys {
     val CLOSURE_BACKGROUND_SYNC = booleanPreferencesKey("closure_background_sync") // Tier 2
     val CLOSURE_ALERT_LEAD_HOURS = intPreferencesKey("closure_alert_lead_hours")
     val CLOSURE_TIER2_OFFER_SHOWN = booleanPreferencesKey("closure_tier2_offer_shown")
+    val NOTIFICATION_PERMISSION_ASKED = booleanPreferencesKey("notification_permission_asked")
     val TOW_LAST_SYNC_MILLIS = longPreferencesKey("tow_last_sync_millis")
     val TOW_NEWEST_ENTRY_MILLIS = longPreferencesKey("tow_newest_entry_millis")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
@@ -586,6 +587,24 @@ class SettingsRepository(private val context: Context) {
      * alarms, no tow banner line.
      */
     suspend fun towEnabled(): Boolean = closuresEnabled()
+
+    /**
+     * Whether Park has ever put up Android's notification-permission dialog (or the explanation before it).
+     * Android can't tell "never asked" from "denied for good", so this is remembered here: the first manual
+     * park asks only while it's false (Permissions-banners-plan P1b), and never again after.
+     */
+    val notificationPermissionAsked: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.NOTIFICATION_PERMISSION_ASKED] ?: false
+    }
+
+    suspend fun setNotificationPermissionAsked() {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.NOTIFICATION_PERMISSION_ASKED] = true }
+    }
+
+    /** Debug builds only (DebugControlReceiver's RESET_NOTIFICATION_ASK): lets the first-park ask show again. */
+    suspend fun resetNotificationPermissionAsked() {
+        context.dataStore.edit { prefs -> prefs.remove(SettingsKeys.NOTIFICATION_PERMISSION_ASKED) }
+    }
 
     /** When the tow-zone feed was last fetched COMPLETELY (see TowZoneRepository), or null if never. */
     val towLastSyncMillis: Flow<Long?> = context.dataStore.data.map { prefs ->

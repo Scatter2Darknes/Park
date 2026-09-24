@@ -31,6 +31,16 @@ data class ReminderHealthState(
     val isHealthy: Boolean get() = health == ReminderHealth.OK
 }
 
+/**
+ * Whether to ask for notification permission right after a manual park (Permissions-banners-plan P1b, owner
+ * decision 2026-09-24: yes). Only on Android 13+ (API 33, where it's a runtime permission; below that notifications
+ * are allowed unless the person turned them off, and there is no dialog to show), only when it isn't granted, and
+ * only if Park has never asked — after that the red banner and Settings are the way back, since Android itself stops
+ * showing the dialog after two denials. Pure, so it's unit tested.
+ */
+fun shouldAskNotificationPermissionAtPark(sdkInt: Int, granted: Boolean, askedBefore: Boolean): Boolean =
+    sdkInt >= 33 && !granted && !askedBefore
+
 /** A channel that has been switched off reports this importance. */
 private const val CHANNEL_OFF = 0 // NotificationManager.IMPORTANCE_NONE
 

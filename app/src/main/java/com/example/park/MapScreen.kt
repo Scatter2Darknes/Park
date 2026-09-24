@@ -196,6 +196,19 @@ fun MapScreen(
         onDispose { exactAlarmLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // The one-time notification-permission ask at the first manual park (Permissions-banners-plan P1b): the
+    // moment the person has just parked is when "Park wants to remind you" makes sense. A short explanation
+    // comes first, then Android's own dialog. Asked at most once (SettingsRepository.notificationPermissionAsked).
+    var notificationAskVisible by remember { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        reminderHealth = currentReminderHealth(context)
+        // A reminder that fell due while notifications were blocked wasn't recorded as delivered; re-arming
+        // posts it now (e.g. parking where a sweep starts in 20 minutes).
+        if (granted) scope.launch { rearmAllActiveReminders(context) }
+    }
+
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var locationOverlayRef by remember { mutableStateOf<MyLocationNewOverlay?>(null) }
@@ -323,6 +336,11 @@ fun MapScreen(
         refreshActiveParkedCars()
         parkingFlowState = ParkingFlowState.Hidden
         val settings = SettingsRepository(context)
+        val notificationsGranted = android.os.Build.VERSION.SDK_INT < 33 ||
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (shouldAskNotificationPermissionAtPark(android.os.Build.VERSION.SDK_INT, notificationsGranted, settings.notificationPermissionAsked.first())) {
+            notificationAskVisible = true
+        }
         suspend fun offerWanted() = !settings.closureTier2OfferShown.first() && !settings.closureBackgroundSync.first()
         val wanted = offerWanted()
         android.util.Log.d("ClosureAlert", "Tier 2 offer after manual park: shownBefore=${settings.closureTier2OfferShown.first()} " +
@@ -1827,6 +1845,30 @@ fun MapScreen(
             },
             onNotNow = { closureOfferVisible = false }
         )
+        if (notificationAskVisible) {
+            // Any way out of this counts as "asked": Park never raises it again (the red banner and Settings remain).
+            fun closeAsked() {
+                notificationAskVisible = false
+                scope.launch { SettingsRepository(context).setNotificationPermissionAsked() }
+            }
+            AlertDialog(
+                onDismissRequest = { closeAsked() },
+                title = { Text("Get parking reminders?") },
+                text = {
+                    Text(
+                        "Park reminds you before street cleaning, a permit time limit or a tow-away zone " +
+                                "where you just parked. Android needs your OK to show those reminders."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        closeAsked()
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }) { Text("Allow reminders") }
+                },
+                dismissButton = { TextButton(onClick = { closeAsked() }) { Text("Not now") } }
+            )
+        }
         when (val state = parkingFlowState) {
             is ParkingFlowState.ChoosingCar -> {
                 var cars by remember { mutableStateOf<List<Car>>(emptyList()) }

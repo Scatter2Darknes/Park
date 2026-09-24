@@ -113,7 +113,12 @@ fun SettingsScreen(
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> hasNotificationPermission = granted }
+    ) { granted ->
+        hasNotificationPermission = granted
+        // Reminders that fell due while notifications were blocked weren't recorded as delivered; re-arming
+        // posts them now instead of leaving them lost.
+        if (granted) scope.launch { rearmAllActiveReminders(context) }
+    }
     var bluetoothLinkedCars by remember { mutableStateOf<List<Car>>(emptyList()) }
     var testBluetoothStatus by remember { mutableStateOf<String?>(null) }
     var cacheSizeBytes by remember { mutableStateOf(0L) }
@@ -1532,6 +1537,8 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             Button(onClick = {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    // Asked here: the first-park prompt (MapScreen) must not ask again.
+                    scope.launch { settings.setNotificationPermissionAsked() }
                     notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }) { Text("Enable Notifications") }

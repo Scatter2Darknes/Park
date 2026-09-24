@@ -18,9 +18,9 @@ On Z's S25, `POST_NOTIFICATIONS` was **denied** (`granted=false, flags=[USER_SET
 | Task | Branch | State |
 |---|---|---|
 | P1 Notifications-blocked banner + Settings row | `notif-blocked-banner` | code done; verified on emulator, awaiting S25 check |
-| P1b Contextual permission request at first park (optional) | same | not started (**needs Z's decision**) |
+| P1b Contextual permission request at first park (optional) | `notif-permission-at-park` | code done (Z: yes, 2026-09-24); awaiting device test |
 | P2 Script/digest updates | same | done; verified on emulator |
-| P3 Boot-missed detector | `boot-missed-detector` | **gated on Z** |
+| P3 Boot-missed detector | `boot-missed-detector` | **not built**: Z's further `rearm_check --mode boot` runs pass (2026-09-24). Revisit only if a boot failure comes back. |
 
 ## P1. Notifications-blocked banner
 
@@ -53,6 +53,12 @@ On Z's S25, `POST_NOTIFICATIONS` was **denied** (`granted=false, flags=[USER_SET
 ## P1b. Contextual permission request at first park (optional; needs Z's decision)
 
 The project deliberately deferred the notification-permission prompt (Android's guidance is to ask when the user has context). The banner is the safety net either way. A middle path: the first time the user parks a car and the permission has **never been requested**, ask right then, with a one-line explanation of why. After a denial, Android stops showing the dialog (two denials), so the banner's settings button is the only path from then on. Skip this if Z prefers to keep the prompt deferred.
+
+**Built (2026-09-24):** after the first MANUAL park (`finishManualPark`) on Android 13+ with notifications not granted and
+`notificationPermissionAsked` false, a short "Get parking reminders?" dialog explains why, then "Allow reminders" opens
+Android's dialog. Any way out (Allow, Not now, back) sets the flag, so Park never asks again; the Settings button sets it
+too. On grant, reminders are re-armed so one that fell due while blocked is posted. Bluetooth auto-parks don't ask (no
+screen). Rule unit-tested (`shouldAskNotificationPermissionAtPark`); `debug_hooks.py reset-notification-ask` resets the flag.
 
 ## P2. Script and digest updates
 

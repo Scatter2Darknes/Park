@@ -8,6 +8,15 @@ import org.junit.Test
 
 class ReminderHealthTest {
 
+    @Test
+    fun firstParkAsk_onlyOnAndroid13Plus_whenNotGranted_andNeverAskedBefore() {
+        assertTrue(shouldAskNotificationPermissionAtPark(sdkInt = 33, granted = false, askedBefore = false))
+        assertTrue(shouldAskNotificationPermissionAtPark(sdkInt = 37, granted = false, askedBefore = false))
+        assertFalse("already granted", shouldAskNotificationPermissionAtPark(33, granted = true, askedBefore = false))
+        assertFalse("asked once already: never again", shouldAskNotificationPermissionAtPark(33, granted = false, askedBefore = true))
+        assertFalse("API 29 (the S9): no runtime permission, no dialog", shouldAskNotificationPermissionAtPark(29, granted = false, askedBefore = false))
+    }
+
     private val on = 3   // IMPORTANCE_DEFAULT-ish: any value above NONE means "not blocked"
     private val off = 0  // IMPORTANCE_NONE
 
