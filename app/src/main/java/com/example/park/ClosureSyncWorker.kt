@@ -32,6 +32,16 @@ class ClosureSyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             if (!SettingsRepository(applicationContext).closureBackgroundSync.first()) return Result.success()
             val count = StreetClosureRepository(applicationContext).refreshFromNetwork()
             android.util.Log.d("ClosureSync", "Background closure sync complete: $count closures")
+            // Tow zones ride on the same Tier 2 job (spec §4: the worker can be shared). Its own
+            // try, so a tow-feed failure never undoes a good closure sync.
+            try {
+                val towCount = TowZoneRepository(applicationContext).refreshFromNetwork()
+                android.util.Log.d("TowSync", "Background tow sync complete: $towCount zones")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("TowSync", "Background tow sync failed", e)
+            }
             // Parked cars pick up new, moved or cancelled closures right away.
             refreshParkedSchedulesAfterSync(applicationContext)
             Result.success()

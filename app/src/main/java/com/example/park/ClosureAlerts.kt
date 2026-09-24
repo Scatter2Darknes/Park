@@ -15,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -307,7 +309,7 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
             alarmManager.cancel(closureAlertPendingIntent(context, parked.carId, null))
             val atSavedLocation = parked.segmentBlockSweepId == null
             val (title, text) = closureAlertContent(carName, plan.closure, atSavedLocation, now)
-            if (postClosureNotification(context, parked.carId, NotificationIds.Purpose.CLOSURE_ALERT, title, text)) {
+            if (postStandardNotice(context, parked.carId, NotificationIds.Purpose.CLOSURE_ALERT, title, text)) {
                 AppDatabase.getInstance(context).parkedStateDao()
                     .markClosureDelivered(parked.carId, parked.parkedAtMillis, plan.closure.startMillis)
                 // Arm the NEXT closure, if any (its alert waits until this one has ended — see planClosureAlert).
@@ -324,7 +326,7 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
 }
 
 /** Posts on the normal (standard-tier) channel. Returns false if notifications are blocked, so the marker isn't recorded. */
-private fun postClosureNotification(
+internal fun postStandardNotice(
     context: Context,
     carId: Long,
     purpose: NotificationIds.Purpose,
@@ -420,23 +422,44 @@ private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parke
     // Both closure features off: nothing to do, exactly as before closures existed (the re-arm the
     // save already ran has cancelled any closure alert). Park-time check off but Tier 2 on: no
     // fetch here, but still re-arm and notify from the background-synced data.
+    // Tow zones share these switches (SettingsRepository.towEnabled), so this check covers both.
     if (!settings.closuresEnabled()) return
-    val lastSync = settings.closuresLastSyncMillis.first()
     val fetchAllowed = settings.closureParkTimeCheck.first()
-    if (fetchAllowed && (lastSync == null || System.currentTimeMillis() - lastSync > CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS)) {
-        try {
-            withTimeout(CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS) { StreetClosureRepository(context).refreshFromNetwork() }
-        } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "park-time closure fetch timed out after ${CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS}ms — using stored data")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e // a newer park replaced this check
-        } catch (e: Exception) {
-            Log.w(TAG, "park-time closure fetch failed — using stored data", e)
+    if (fetchAllowed) {
+        // Both feeds at once, each inside the same short budget, so the Bluetooth receiver's wait
+        // (CLOSURE_CHECK_RECEIVER_WAIT_MILLIS) still covers the whole check.
+        coroutineScope {
+            val closures = async { refreshIfOlderThan(settings.closuresLastSyncMillis.first(), "closure") { StreetClosureRepository(context).refreshFromNetwork() } }
+            val tow = async { refreshIfOlderThan(settings.towLastSyncMillis.first(), "tow-zone") { TowZoneRepository(context).refreshFromNetwork() } }
+            closures.await()
+            tow.await()
         }
     }
     recomputeParkedSchedule(context, carId, expectedParkedAtMillis = parkedAtMillis)
     notifyNearbyClosureOnPark(context, carId, parkedAtMillis)
+    try {
+        notifyTowOnPark(context, carId, parkedAtMillis)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG, "park-time tow notice failed for car $carId", e)
+    }
     BluetoothConnectionCenter.notifyParkedStateChanged() // redraw the banner with the result
+}
+
+/** Runs [refresh] (within the park-time budget) when the data last synced at [lastSync] is older than
+ *  CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS. A failure or timeout just leaves the stored data in use. */
+private suspend fun refreshIfOlderThan(lastSync: Long?, what: String, refresh: suspend () -> Int) {
+    if (lastSync != null && System.currentTimeMillis() - lastSync <= CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS) return
+    try {
+        withTimeout(CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS) { refresh() }
+    } catch (e: TimeoutCancellationException) {
+        Log.w(TAG, "park-time $what fetch timed out after ${CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS}ms — using stored data")
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e // a newer park replaced this check
+    } catch (e: Exception) {
+        Log.w(TAG, "park-time $what fetch failed — using stored data", e)
+    }
 }
 
 /**
@@ -451,6 +474,6 @@ private suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, par
     val hits = findClosuresForParkedCar(context, parked, now)
     val nearby = pickNearbyToNotifyOnPark(hits, now, closureLeadMillis(context)) ?: return
     val (title, text) = closureNearbyContent(carName, nearby.closure, now)
-    postClosureNotification(context, carId, NotificationIds.Purpose.CLOSURE_NEARBY, title, text)
+    postStandardNotice(context, carId, NotificationIds.Purpose.CLOSURE_NEARBY, title, text)
     Log.d(TAG, "car $carId: nearby closure ${nearby.closure.objectId} notified at park time")
 }

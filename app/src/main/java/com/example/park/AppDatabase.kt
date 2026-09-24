@@ -75,6 +75,7 @@ suspend fun saveParkedState(
     // The previous spot's closure alert (alarm + notification). The new spot's is armed by the
     // park-time check started at the end of this function.
     cancelClosureAlert(context, carId)
+    cancelTowReminder(context, carId) // likewise the previous spot's tow reminders; the new spot's are armed the same way
     // The whole CURB's schedule, not just the matched row's: a curb is often described by several rows (one per
     // sweep weekday / week pattern), and parking on one must cover them all — see CurbSchedule.
     val curbRows = loadCurbRows(context, segment)
@@ -263,6 +264,7 @@ suspend fun saveUnmanagedParkedState(
     // before a caller sets a fresh meter timer for this same row.
     cancelMeterTimer(context, carId)
     cancelClosureAlert(context, carId) // as in saveParkedState
+    cancelTowReminder(context, carId)
 
     val rppRegulation = findConfidentRppMatch(context, point)
     android.util.Log.d(

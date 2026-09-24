@@ -62,7 +62,18 @@ object NotificationIds {
         CLOSURE_ALERT(11 * SPAN),
         /** The one-per-park "street closure nearby" notice (see ClosureAlerts.kt). Its own id so it
          *  never replaces a "blocked in" alert for the same car. */
-        CLOSURE_NEARBY(12 * SPAN)
+        CLOSURE_NEARBY(12 * SPAN),
+        /** Tow-zone reminder family (see TowAlerts.kt): the normal and urgent tiers before an enforcement
+         *  window starts, and the advance alert at the tow/closure lead time. */
+        TOW_NORMAL(13 * SPAN),
+        TOW_URGENT(14 * SPAN),
+        TOW_ADVANCE(15 * SPAN),
+        /** "Tow-away zone in effect now" one-off notice, posted at park time. */
+        TOW_ACTIVE(16 * SPAN),
+        /** The one-per-park "tow-away zone nearby — check signs" notice for an uncertain match. */
+        TOW_NEARBY(17 * SPAN),
+        /** Request code only: advances a parked car past a tow window. */
+        ROLL_FORWARD_TOW(18 * SPAN)
     }
 
     /**

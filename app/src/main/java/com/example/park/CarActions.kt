@@ -9,14 +9,19 @@ import java.time.ZoneId
 // reload() the same way sweep data already is.
 // closureStatus: street closures affecting the parked spot (see ClosureAlerts.kt), resolved at load
 // time like rppDeadline. Null when the car isn't parked. NOT a deadline, so soonestDeadline ignores it.
+// towDeadlineMillis / towStatus: temporary tow zones (see TowAlerts.kt), resolved at load time too.
+// The deadline IS a deadline (soonestDeadline ranks it); the status is the banner's tow line (in
+// effect now, maybe nearby, data unavailable or out of date). Both null when tow checks are off.
 data class CarWithStatus(
     val car: Car,
     val parkedState: ParkedState?,
     val rppDeadline: RppWarning? = null,
-    val closureStatus: ClosureStatus? = null
+    val closureStatus: ClosureStatus? = null,
+    val towDeadlineMillis: Long? = null,
+    val towStatus: TowStatus? = null
 )
 
-enum class DeadlineKind { SWEEP, RPP, METER }
+enum class DeadlineKind { SWEEP, RPP, METER, TOW }
 data class CarDeadline(val millis: Long, val kind: DeadlineKind)
 
 /**
@@ -32,7 +37,8 @@ fun CarWithStatus.soonestDeadline(): CarDeadline? {
         ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         ?.let { CarDeadline(it, DeadlineKind.RPP) }
     val meter = parkedState?.meterTimerAtMillis?.let { CarDeadline(it, DeadlineKind.METER) }
-    return listOfNotNull(sweep, rpp, meter).minByOrNull { it.millis }
+    val tow = towDeadlineMillis?.let { CarDeadline(it, DeadlineKind.TOW) }
+    return listOfNotNull(sweep, rpp, meter, tow).minByOrNull { it.millis }
 }
 
 suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
@@ -41,6 +47,7 @@ suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
     val closuresEnabled = settings.closuresEnabled() // both closure features off = no closure line at all
     val closuresLastSync = settings.closuresLastSyncMillis.first()
     val closureLead = closureLeadMillis(context)
+    val towEnabled = settings.towEnabled()
     return db.carDao().getAll().map { car ->
         val parked = db.parkedStateDao().getForCar(car.id)
         val rppDeadline = parked?.let { resolveRppDeadline(context, it, car) }
@@ -52,7 +59,17 @@ suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
                 ClosureStatus.Unchecked // can't tell, so never "clear"
             }
         }
-        CarWithStatus(car, parked, rppDeadline, closureStatus)
+        var towDeadline: Long? = null
+        val towStatus = parked?.takeIf { towEnabled }?.let {
+            try {
+                towDeadline = resolveTowDeadlineMillis(context, it)
+                resolveTowStatus(context, it, closureLead)
+            } catch (e: Exception) {
+                android.util.Log.w("TowAlert", "Resolving tow status for car ${car.id} failed", e)
+                TowStatus.Unchecked // can't tell, so never "clear"
+            }
+        }
+        CarWithStatus(car, parked, rppDeadline, closureStatus, towDeadline, towStatus)
     }
 }
 

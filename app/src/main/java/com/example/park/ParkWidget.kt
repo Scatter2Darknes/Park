@@ -220,6 +220,7 @@ private suspend fun loadWidgetSummary(context: Context): WidgetSummary {
         when (it.kind) {
             DeadlineKind.RPP -> "RPP limit: $base"
             DeadlineKind.METER -> "Meter timer: $base"
+            DeadlineKind.TOW -> "Tow-away zone: $base"
             DeadlineKind.SWEEP -> base
         }
     }

@@ -1298,6 +1298,7 @@ fun MapScreen(
                                 val mostUrgentKindLabel = when (mostUrgentDeadline?.kind) {
                                     DeadlineKind.RPP -> " \u00b7 RPP limit"
                                     DeadlineKind.METER -> " \u00b7 Meter timer"
+                                    DeadlineKind.TOW -> " \u00b7 Tow zone"
                                     else -> ""
                                 }
                                 Text(
@@ -1338,6 +1339,19 @@ fun MapScreen(
                                                 .clickable { centerMapOnClosure(c.closureStatus) }
                                         )
                                     }
+                                // Tow zones: the single most important tow line (in effect now, maybe
+                                // nearby, check unavailable, data out of date). The tow DEADLINE itself
+                                // is already in the countdown above when it's the soonest.
+                                activeParkedCars
+                                    .mapNotNull { c -> towBannerText(c.towStatus, now)?.let { Triple(c, it, towBannerRank(c.towStatus)) } }
+                                    .minByOrNull { it.third }
+                                    ?.let { (c, line, _) ->
+                                        Text(
+                                            if (c.car.id == mostUrgent.car.id) line else "${c.car.name}: $line",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
                             }
 
                             if (parkedBannerExpanded) {
@@ -1361,6 +1375,7 @@ fun MapScreen(
                                             when (it.kind) {
                                                 DeadlineKind.RPP -> "RPP limit: $base"
                                                 DeadlineKind.METER -> "Meter timer: $base"
+                                                DeadlineKind.TOW -> "Tow-away zone: $base"
                                                 DeadlineKind.SWEEP -> base
                                             }
                                         } ?: "No cleaning schedule found"
@@ -1397,6 +1412,9 @@ fun MapScreen(
                                                         parkedBannerExpanded = false
                                                     }
                                                 )
+                                            }
+                                            towBannerText(item.towStatus, now)?.let {
+                                                Text(it, style = MaterialTheme.typography.bodySmall)
                                             }
                                         }
                                         Text(

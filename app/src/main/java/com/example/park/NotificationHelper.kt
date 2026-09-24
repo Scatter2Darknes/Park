@@ -15,7 +15,10 @@ import androidx.core.app.NotificationManagerCompat
 // SWEEP_ACTIVE is the one kind that is not a scheduled tier: a one-off, dismissible "sweeping is
 // happening right now" notice posted when a car is parked inside an active sweep window. It has
 // no delivery marker, no snooze, and is never scheduled by an alarm.
-enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE }
+// The TOW_ kinds are the temporary tow-zone family (TowAlerts.kt): NORMAL/URGENT behave exactly like
+// the sweep and RPP pairs, ADVANCE is the extra heads-up at the tow/closure lead time (normal channel,
+// with its own delivery marker), and ACTIVE is the tow counterpart of SWEEP_ACTIVE.
+enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE, TOW_NORMAL, TOW_URGENT, TOW_ADVANCE, TOW_ACTIVE }
 
 object NotificationHelper {
     const val CHANNEL_ID_NORMAL = "parking_reminders"
@@ -76,8 +79,8 @@ object NotificationHelper {
         corridor: String,
         nextSweepAtMillis: Long
     ): Boolean {
-        val isUrgent = kind == ReminderKind.URGENT || kind == ReminderKind.RPP_URGENT
-        val isActiveNotice = kind == ReminderKind.SWEEP_ACTIVE
+        val isUrgent = kind == ReminderKind.URGENT || kind == ReminderKind.RPP_URGENT || kind == ReminderKind.TOW_URGENT
+        val isActiveNotice = kind == ReminderKind.SWEEP_ACTIVE || kind == ReminderKind.TOW_ACTIVE
         // "Sweeping is happening now" is as urgent as it gets, so it uses the urgent channel — but
         // it's a one-off notice, so unlike the urgent reminders it's swipeable and has no actions.
         val channelId = if (isUrgent || isActiveNotice) CHANNEL_ID_URGENT else CHANNEL_ID_NORMAL

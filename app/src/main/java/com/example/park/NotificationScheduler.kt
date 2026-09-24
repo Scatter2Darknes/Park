@@ -19,6 +19,10 @@ private fun ReminderKind.idPurpose(): NotificationIds.Purpose = when (this) {
     ReminderKind.RPP_NORMAL -> NotificationIds.Purpose.RPP_NORMAL
     ReminderKind.RPP_URGENT -> NotificationIds.Purpose.RPP_URGENT
     ReminderKind.SWEEP_ACTIVE -> NotificationIds.Purpose.SWEEP_ACTIVE
+    ReminderKind.TOW_NORMAL -> NotificationIds.Purpose.TOW_NORMAL
+    ReminderKind.TOW_URGENT -> NotificationIds.Purpose.TOW_URGENT
+    ReminderKind.TOW_ADVANCE -> NotificationIds.Purpose.TOW_ADVANCE
+    ReminderKind.TOW_ACTIVE -> NotificationIds.Purpose.TOW_ACTIVE
 }
 
 fun reminderRequestCode(carId: Long, kind: ReminderKind): Int = NotificationIds.forCar(carId, kind.idPurpose())
@@ -141,6 +145,10 @@ suspend fun recordReminderDelivery(
         ReminderKind.RPP_NORMAL -> dao.markRppNormalDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.RPP_URGENT -> dao.markRppUrgentDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.SWEEP_ACTIVE -> Unit // one-off notice; has no delivery marker
+        ReminderKind.TOW_NORMAL -> dao.markTowNormalDelivered(carId, parkedAtMillis, deadlineMillis)
+        ReminderKind.TOW_URGENT -> dao.markTowUrgentDelivered(carId, parkedAtMillis, deadlineMillis)
+        ReminderKind.TOW_ADVANCE -> dao.markTowAdvanceDelivered(carId, parkedAtMillis, deadlineMillis)
+        ReminderKind.TOW_ACTIVE -> Unit // one-off notice, like SWEEP_ACTIVE
     }
 }
 
@@ -238,11 +246,12 @@ private suspend fun scheduleOrFireImmediately(
  * countdown would jump to next week early. If a roll-forward alarm is missed (reboot, force-stop),
  * the re-arm in [rearmAllActiveReminders] does the same recompute the next time it runs.
  */
-enum class RollForwardKind { SWEEP, RPP }
+enum class RollForwardKind { SWEEP, RPP, TOW }
 
 private fun rollForwardRequestCode(carId: Long, kind: RollForwardKind): Int = NotificationIds.forCar(carId, when (kind) {
     RollForwardKind.SWEEP -> NotificationIds.Purpose.ROLL_FORWARD_SWEEP
     RollForwardKind.RPP -> NotificationIds.Purpose.ROLL_FORWARD_RPP
+    RollForwardKind.TOW -> NotificationIds.Purpose.ROLL_FORWARD_TOW
 })
 
 private fun cancelRollForward(context: Context, carId: Long, kind: RollForwardKind) {
@@ -425,6 +434,23 @@ fun cancelRppReminder(context: Context, carId: Long) {
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.RPP_URGENT))
 }
 
+/** Cancels the whole tow family for a car: its three alarms, its roll-forward alarm and every tow
+ *  notification (including the park-time ones). The "not parked here any more" path. */
+fun cancelTowReminder(context: Context, carId: Long) {
+    cancelTowAlarms(context, carId)
+    for (kind in listOf(ReminderKind.TOW_NORMAL, ReminderKind.TOW_URGENT, ReminderKind.TOW_ADVANCE, ReminderKind.TOW_ACTIVE)) {
+        NotificationHelper.cancel(context, reminderNotificationId(carId, kind))
+    }
+    NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.TOW_NEARBY))
+}
+
+private fun cancelTowAlarms(context: Context, carId: Long) {
+    cancelAlarm(context, carId, ReminderKind.TOW_NORMAL)
+    cancelAlarm(context, carId, ReminderKind.TOW_URGENT)
+    cancelAlarm(context, carId, ReminderKind.TOW_ADVANCE)
+    cancelRollForward(context, carId, RollForwardKind.TOW)
+}
+
 /** Cancels the sweep half only — both alarm tiers, the sweep roll-forward alarm and their notifications
  *  — for a car whose new spot has no upcoming sweep. The RPP half is independent (see cancelRppReminder). */
 fun cancelSweepReminder(context: Context, carId: Long) {
@@ -455,6 +481,7 @@ fun cancelParkingReminder(context: Context, carId: Long) {
     // stale once the car is no longer parked there.
     cancelMeterTimer(context, carId)
     cancelClosureAlert(context, carId) // likewise a closure alert
+    cancelTowReminder(context, carId) // and the tow family
 }
 
 /** An RPP deadline plus the two epoch-millis values derived from it. */
@@ -495,7 +522,8 @@ private class ArmSettings(
     val reminderOffsetMillis: Long,
     val urgentOffsetMillis: Long?,
     val closuresEnabled: Boolean,
-    val closureLeadMillis: Long
+    val closureLeadMillis: Long,
+    val towEnabled: Boolean
 )
 
 private suspend fun loadArmSettings(context: Context): ArmSettings {
@@ -507,7 +535,8 @@ private suspend fun loadArmSettings(context: Context): ArmSettings {
         reminderOffsetMillis = offsetMinutes * 60_000L,
         urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null,
         closuresEnabled = settingsRepo.closuresEnabled(),
-        closureLeadMillis = closureLeadMillis(context)
+        closureLeadMillis = closureLeadMillis(context),
+        towEnabled = settingsRepo.towEnabled()
     )
 }
 
@@ -598,7 +627,69 @@ private suspend fun armParkedState(
     } catch (e: Exception) {
         android.util.Log.w("ClosureAlert", "Arming the closure alert for car ${parked.carId} failed", e)
     }
+
+    // Tow zones: a third deadline family, likewise never allowed to break the others.
+    try {
+        armTowReminders(context, parked, car, settings, clearStaleNotifications)
+    } catch (e: Exception) {
+        android.util.Log.w("TowAlert", "Arming the tow reminders for car ${parked.carId} failed", e)
+    }
     return deadlineChanged
+}
+
+/**
+ * The tow family for one parked car (see TowAlerts.kt): normal + urgent reminders before the next
+ * enforcement window on the car's block, a roll-forward at that window's start, and the advance alert
+ * at the lead time before a zone's FIRST window. Confident matches only; an uncertain one gets its
+ * park-time notice instead. Tow checks switched off in Settings clears everything, alarms and
+ * notifications alike, like closures.
+ */
+private suspend fun armTowReminders(
+    context: Context,
+    parked: ParkedState,
+    car: Car,
+    settings: ArmSettings,
+    clearStaleNotifications: Boolean
+) {
+    if (!settings.towEnabled) {
+        cancelTowReminder(context, parked.carId)
+        return
+    }
+    val zones = confidentTowZones(context, parked, enabled = true)
+    val now = sfNow()
+    val deadline = nextTowDeadline(zones, now)
+    if (deadline != null) {
+        scheduleTiers(
+            context, parked.carId, car.name, towReminderLabel(deadline.zone),
+            deadline.startMillis, parked.parkedAtMillis,
+            ReminderKind.TOW_NORMAL, ReminderKind.TOW_URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
+            parked.towNormalDeliveredForMillis, parked.towUrgentDeliveredForMillis, clearStaleNotifications,
+            RollForwardKind.TOW, deadline.startMillis
+        )
+    } else {
+        cancelAlarm(context, parked.carId, ReminderKind.TOW_NORMAL)
+        cancelAlarm(context, parked.carId, ReminderKind.TOW_URGENT)
+        cancelRollForward(context, parked.carId, RollForwardKind.TOW)
+        if (clearStaleNotifications) {
+            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.TOW_NORMAL))
+            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.TOW_URGENT))
+        }
+    }
+
+    val advance = towAdvanceTarget(zones, now)
+    if (advance != null) {
+        // Fires at once when the zone is already inside the lead time (a permit posted late, or a car
+        // parked two days before a zone starts): scheduleOrFireImmediately's elapsed-trigger branch.
+        scheduleOrFireImmediately(
+            context, parked.carId, car.name, towReminderLabel(advance.zone), advance.startMillis, parked.parkedAtMillis,
+            settings.closureLeadMillis, ReminderKind.TOW_ADVANCE, System.currentTimeMillis(),
+            canScheduleExactAlarmsCompat(context),
+            alreadyDeliveredForDeadline = parked.towAdvanceDeliveredForMillis == advance.startMillis,
+            alarmManager = context.getSystemService(AlarmManager::class.java)
+        )
+    } else {
+        cancelAlarm(context, parked.carId, ReminderKind.TOW_ADVANCE)
+    }
 }
 
 private suspend fun armAllParkedStates(context: Context, clearStaleNotifications: Boolean) = armMutex.withLock {

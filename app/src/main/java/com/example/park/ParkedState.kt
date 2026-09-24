@@ -62,6 +62,10 @@ data class ParkedState(
         ReminderKind.RPP_NORMAL -> rppNormalDeliveredForMillis
         ReminderKind.RPP_URGENT -> rppUrgentDeliveredForMillis
         ReminderKind.SWEEP_ACTIVE -> null // a one-off notice, not a scheduled tier — nothing to de-duplicate
+        ReminderKind.TOW_NORMAL -> towNormalDeliveredForMillis
+        ReminderKind.TOW_URGENT -> towUrgentDeliveredForMillis
+        ReminderKind.TOW_ADVANCE -> towAdvanceDeliveredForMillis
+        ReminderKind.TOW_ACTIVE -> null // one-off, like SWEEP_ACTIVE
     }
 }
 
@@ -116,6 +120,15 @@ interface ParkedStateDao {
 
     @Query("UPDATE parked_state SET rppUrgentDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun markRppUrgentDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
+
+    @Query("UPDATE parked_state SET towNormalDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun markTowNormalDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
+
+    @Query("UPDATE parked_state SET towUrgentDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun markTowUrgentDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
+
+    @Query("UPDATE parked_state SET towAdvanceDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun markTowAdvanceDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
 
     @Query("UPDATE parked_state SET closureDeliveredForMillis = :closureStartMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun markClosureDelivered(carId: Long, parkedAtMillis: Long, closureStartMillis: Long)

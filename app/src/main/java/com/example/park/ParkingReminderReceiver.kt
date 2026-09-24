@@ -41,6 +41,17 @@ fun buildReminderContent(
         // Here nextSweepAtMillis is when the sweeping window ENDS, not when it starts.
         ReminderKind.SWEEP_ACTIVE -> "Sweeping in progress \u2014 move $carName now" to
                 ("Street cleaning on $corridor is under way" + (timeText?.let { " until $it" } ?: ""))
+        // For the tow kinds, corridor is the zone's street and nextSweepAtMillis the enforcement start
+        // (TOW_ACTIVE: the end of the window in force).
+        ReminderKind.TOW_URGENT -> "Move $carName now \u2014 tow-away zone" to
+                ("A temporary tow-away zone on $corridor starts" + (timeText?.let { " $it" } ?: " soon"))
+        ReminderKind.TOW_NORMAL -> "Move $carName soon \u2014 tow-away zone" to
+                ("A temporary tow-away zone on $corridor is coming up" + (timeText?.let { " \u2014 $it" } ?: ""))
+        ReminderKind.TOW_ADVANCE -> "$carName: tow-away zone posted" to
+                ("A temporary tow-away zone on $corridor starts" + (timeText?.let { " $it" } ?: " soon") +
+                        ". Move your car before then, or it may be towed.")
+        ReminderKind.TOW_ACTIVE -> "Tow-away zone in effect \u2014 move $carName now" to
+                ("A temporary tow-away zone on $corridor is in effect" + (timeText?.let { " until $it" } ?: ""))
     }
 }
 
