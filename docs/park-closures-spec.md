@@ -152,8 +152,11 @@ If a finding contradicts an assumption below, stop and flag it rather than worki
 - No signal / timeout: fall back to the last synced data if any; if none or too old, say plainly
   that the tow check couldn't run. Never imply the curb is clear.
 - Also runs for Bluetooth auto-park saves. **(corrected)** Those saves happen in a
-  `BroadcastReceiver`, which is too short-lived for a network call. Run the fetch as an expedited
-  one-time WorkManager job (for both manual and auto park, so there's one path).
+  `BroadcastReceiver`. Follow the Reliability Plan decision for receiver work: `goAsync()` +
+  coroutine, `finish()` in `finally`, with the fetch's short timeout well inside the receiver's time
+  budget. **No WorkManager and no `setExpedited`** there (`setExpedited` crashes on API < 31
+  without `getForegroundInfo`, and the S9 is API 29). Manual park runs the same fetch function
+  from the UI's coroutine scope.
 - **Ignores the Wi-Fi-only setting.** You're at the curb on cellular; that's the point of the check.
   Wi-Fi-only applies to the Tier 2 background worker only.
 - Match from the parked **lat/lng** (`parkedLat/Lng`, or the exact pin when set), not only the
@@ -332,7 +335,7 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
 2. ~~Resolve the open decisions~~ Done 2026-09-23 (tow timing in §3 Alerts, off-street flag in
    §3 Saved locations).
 3. Tier settings + one-time offer.
-4. Tow Zones: sync → storage → matching → park-time fetch (WorkManager) → tow reminder family in
+4. Tow Zones: sync → storage → matching → park-time fetch (`goAsync()` in receivers) → tow reminder family in
    `armParkedState` + `soonestDeadline()`. **(corrected)** Replaces the old step 2
    (`CurbRestrictionSource` retrofit); see §1.
 5. Tier 2 background worker.
