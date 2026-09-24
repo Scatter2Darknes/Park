@@ -41,6 +41,10 @@ object SettingsKeys {
     val REFRESH_INTERVAL_HOURS = intPreferencesKey("refresh_interval_hours")
     val LAST_REFRESH_MILLIS = longPreferencesKey("last_refresh_millis")
     val CLOSURES_LAST_SYNC_MILLIS = longPreferencesKey("closures_last_sync_millis")
+    val CLOSURE_PARK_TIME_CHECK = booleanPreferencesKey("closure_park_time_check")
+    val CLOSURE_BACKGROUND_SYNC = booleanPreferencesKey("closure_background_sync") // Tier 2
+    val CLOSURE_ALERT_LEAD_HOURS = intPreferencesKey("closure_alert_lead_hours")
+    val CLOSURE_TIER2_OFFER_SHOWN = booleanPreferencesKey("closure_tier2_offer_shown")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
     val DRIVING_MODE_AUTO_CENTER = booleanPreferencesKey("driving_mode_auto_center")
     val DRIVING_MODE_AUTO_ZOOM = booleanPreferencesKey("driving_mode_auto_zoom")
@@ -128,7 +132,22 @@ object SettingsDefaults {
     // more directly actionable than showing every metered post regardless of hours.
     const val SHOW_METER_BADGES = true
     const val TILE_CACHE_MAX_MB = 200
+    // Street closures (docs/park-closures-spec.md §5). The park-time check is Tier 1, on by
+    // default; background sync is Tier 2, off until the user opts in. With both off, the app
+    // behaves exactly as before closures existed (no fetch, no alerts, no banner line).
+    const val CLOSURE_PARK_TIME_CHECK = true
+    const val CLOSURE_BACKGROUND_SYNC = false
+    const val CLOSURE_ALERT_LEAD_HOURS = 48
 }
+
+/** Choices for how far ahead a street-closure alert goes out, in hours. */
+val CLOSURE_LEAD_PRESETS: List<Pair<Int, String>> = listOf(
+    12 to "12 hours before",
+    24 to "1 day before",
+    48 to "2 days before",
+    72 to "3 days before",
+    168 to "1 week before"
+)
 
 /**
  * Presets shown in the notification-offset picker, in minutes. Extended per feedback to
@@ -520,6 +539,44 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setClosuresLastSyncMillis(value: Long) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURES_LAST_SYNC_MILLIS] = value }
+    }
+
+    /** Tier 1: check for street closures right after each park. */
+    val closureParkTimeCheck: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.CLOSURE_PARK_TIME_CHECK] ?: SettingsDefaults.CLOSURE_PARK_TIME_CHECK
+    }
+
+    suspend fun setClosureParkTimeCheck(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURE_PARK_TIME_CHECK] = value }
+    }
+
+    /** Tier 2: re-sync street closures in the background (ClosureSyncWorker). */
+    val closureBackgroundSync: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.CLOSURE_BACKGROUND_SYNC] ?: SettingsDefaults.CLOSURE_BACKGROUND_SYNC
+    }
+
+    suspend fun setClosureBackgroundSync(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURE_BACKGROUND_SYNC] = value }
+    }
+
+    /** Whether any closure feature is on. Both off = the app behaves as it did before closures. */
+    suspend fun closuresEnabled(): Boolean = closureParkTimeCheck.first() || closureBackgroundSync.first()
+
+    val closureAlertLeadHours: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.CLOSURE_ALERT_LEAD_HOURS] ?: SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS
+    }
+
+    suspend fun setClosureAlertLeadHours(value: Int) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURE_ALERT_LEAD_HOURS] = value }
+    }
+
+    /** The one-time Tier 2 offer (spec §1): true once it has been shown, so it never reappears. */
+    val closureTier2OfferShown: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.CLOSURE_TIER2_OFFER_SHOWN] ?: false
+    }
+
+    suspend fun setClosureTier2OfferShown() {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURE_TIER2_OFFER_SHOWN] = true }
     }
 
     /**

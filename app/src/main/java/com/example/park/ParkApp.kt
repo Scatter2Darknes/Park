@@ -169,6 +169,7 @@ class ParkApp : Application(), DefaultLifecycleObserver {
             val intervalHours = settingsRepo.refreshIntervalHours.first()
             val wifiOnly = settingsRepo.wifiOnlyRefresh.first()
             scheduleSweepingRefresh(this@ParkApp, intervalHours.toLong(), wifiOnly = wifiOnly) // KEEP by default
+            applyClosureSyncSchedule(this@ParkApp) // Tier 2 street closures: scheduled only if opted in; KEEP
 
             // Mirrors whatever's currently saved in Settings (if anything) into ApiKeys'
             // in-memory override before the map has any chance to request a tile — a build

@@ -80,6 +80,9 @@ suspend fun exportBackupJson(context: Context): String {
         put("bluetoothAutoUnparkOnReconnect", settings.bluetoothAutoUnparkOnReconnect.first())
         put("showImminentCountdown", settings.showImminentCountdown.first())
         put("showRppZoneLabels", settings.showRppZoneLabels.first())
+        put("closureParkTimeCheck", settings.closureParkTimeCheck.first())
+        put("closureBackgroundSync", settings.closureBackgroundSync.first())
+        put("closureAlertLeadHours", settings.closureAlertLeadHours.first())
     }
 
     val root = JSONObject().apply {
@@ -171,6 +174,14 @@ suspend fun importBackupJson(context: Context, json: String): Result<Unit> = run
         if (s.has("bluetoothAutoUnparkOnReconnect")) settings.setBluetoothAutoUnparkOnReconnect(s.getBoolean("bluetoothAutoUnparkOnReconnect"))
         if (s.has("showImminentCountdown")) settings.setShowImminentCountdown(s.getBoolean("showImminentCountdown"))
         if (s.has("showRppZoneLabels")) settings.setShowRppZoneLabels(s.getBoolean("showRppZoneLabels"))
+        if (s.has("closureParkTimeCheck")) settings.setClosureParkTimeCheck(s.getBoolean("closureParkTimeCheck"))
+        if (s.has("closureBackgroundSync")) settings.setClosureBackgroundSync(s.getBoolean("closureBackgroundSync"))
+        if (s.has("closureAlertLeadHours")) settings.setClosureAlertLeadHours(s.getInt("closureAlertLeadHours"))
+        // The background closure job and every parked car's closure alert follow these settings.
+        if (s.has("closureBackgroundSync") || s.has("closureParkTimeCheck") || s.has("closureAlertLeadHours")) {
+            applyClosureSyncSchedule(context, androidx.work.ExistingPeriodicWorkPolicy.REPLACE)
+            rescheduleAllActiveReminders(context)
+        }
         // The four status colors are restored together via swapAssignment-preserving
         // setSweepStatusColors, rather than four independent writes, so the pairwise-distinct
         // invariant holds even if the imported values happen to collide with current ones.

@@ -141,7 +141,7 @@ class DebugControlReceiver : BroadcastReceiver() {
         db.streetClosureDao().insertAll(listOf(closure))
         recomputeParkedSchedule(context, carId)
         BluetoothConnectionCenter.notifyParkedStateChanged()
-        val status = resolveClosureStatus(context, parked, SettingsRepository(context).closuresLastSyncMillis.first())
+        val status = resolveClosureStatus(context, parked, SettingsRepository(context).closuresLastSyncMillis.first(), closureLeadMillis(context))
         Log.i(TAG, "INJECT_CLOSURE: ${closure.objectId} kind=$kind start=${fmt(start)} end=${fmt(closure.endMillis)} " +
                 "-> banner: ${closureBannerText(status, System.currentTimeMillis())}")
     }
@@ -204,9 +204,12 @@ class DebugControlReceiver : BroadcastReceiver() {
             Log.i(TAG, "  delivered-for-deadline markers: normal=${fmt(parked.normalDeliveredForMillis)} " +
                     "urgent=${fmt(parked.urgentDeliveredForMillis)} rppNormal=${fmt(parked.rppNormalDeliveredForMillis)} " +
                     "rppUrgent=${fmt(parked.rppUrgentDeliveredForMillis)} closure=${fmt(parked.closureDeliveredForMillis)}")
-            val closureStatus = resolveClosureStatus(context, parked, settings.closuresLastSyncMillis.first())
-            Log.i(TAG, "  closures: dataLastSynced=${fmt(settings.closuresLastSyncMillis.first())} " +
-                    "banner='${closureBannerText(closureStatus, nowMillis)}'")
+            val closureStatus = resolveClosureStatus(context, parked, settings.closuresLastSyncMillis.first(), closureLeadMillis(context))
+            Log.i(TAG, "  closures: parkTimeCheck=${settings.closureParkTimeCheck.first()} " +
+                    "backgroundSync=${settings.closureBackgroundSync.first()} leadHours=${settings.closureAlertLeadHours.first()} " +
+                    "tier2OfferShown=${settings.closureTier2OfferShown.first()} " +
+                    "dataLastSynced=${fmt(settings.closuresLastSyncMillis.first())} " +
+                    "banner='${if (settings.closuresEnabled()) closureBannerText(closureStatus, nowMillis) else "(closures off)"}'")
 
             parked.nextSweepAtMillis?.let { deadline ->
                 expectedAlarms += expect("car ${parked.carId} sweep reminder", deadline - offsetMillis, nowMillis)

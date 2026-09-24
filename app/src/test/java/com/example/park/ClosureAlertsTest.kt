@@ -153,6 +153,20 @@ class ClosureAlertsTest {
         assertEquals(ClosureStatus.Clear, closureStatusFor(listOf(blockedIn8Days, nearbyIn3Days), true, now))
     }
 
+    @Test
+    fun theLeadTimeSetting_movesTheAlertAndTheNearbyWindow() {
+        val c = closure(startIn = 5 * day)
+        // 1 week ahead: the alert is already due.
+        assertEquals(ClosureAlertPlan.FireNow(c), planClosureAlert(listOf(blocked(c)), null, now, leadMillis = 7 * day))
+        // 12 hours ahead: scheduled for 12 h before the start.
+        assertEquals(ClosureAlertPlan.ScheduleAt(c, c.startMillis - 12 * hour), planClosureAlert(listOf(blocked(c)), null, now, leadMillis = 12 * hour))
+        // A nearby closure 20 h away is shown/notified with a 1-day lead, not with a 12-hour one.
+        val near = nearby(closure(startIn = 20 * hour, id = "n"))
+        assertEquals(ClosureStatus.Affected(near), closureStatusFor(listOf(near), true, now, leadMillis = day))
+        assertEquals(ClosureStatus.Clear, closureStatusFor(listOf(near), true, now, leadMillis = 12 * hour))
+        assertNull(pickNearbyToNotifyOnPark(listOf(near), now, leadMillis = 12 * hour))
+    }
+
     // --- wording ---
 
     @Test

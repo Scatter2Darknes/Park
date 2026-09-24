@@ -39,8 +39,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "ClosureAlert"
 
-/** How far ahead of a closure's start the "blocked in" alert goes out. Becomes a setting in the next step. */
-const val CLOSURE_ALERT_LEAD_MILLIS = 2 * 24 * 60 * 60_000L
+/** The default of how far ahead of a closure's start the alerts go out (Settings: closureAlertLeadHours). */
+const val CLOSURE_ALERT_LEAD_MILLIS = SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS * 60 * 60_000L
 
 /** Closure data older than this is too old to say "no closures" about (the feed publishes daily). */
 const val CLOSURE_DATA_MAX_AGE_MILLIS = 3 * 24 * 60 * 60_000L
@@ -140,11 +140,16 @@ sealed interface ClosureStatus {
  * NEARBY one within the alert lead time. A real hit is shown even from old data (it's still real);
  * with no hit, old or missing data reads as Unchecked, never as Clear.
  */
-fun closureStatusFor(hits: List<ClosureHit>, dataUsable: Boolean, nowMillis: Long): ClosureStatus {
+fun closureStatusFor(
+    hits: List<ClosureHit>,
+    dataUsable: Boolean,
+    nowMillis: Long,
+    leadMillis: Long = CLOSURE_ALERT_LEAD_MILLIS
+): ClosureStatus {
     val shown = hits.firstOrNull {
-        it.impact == ClosureImpact.BLOCKED_IN && it.closure.startMillis <= nowMillis + CLOSURE_BANNER_HORIZON_MILLIS
+        it.impact == ClosureImpact.BLOCKED_IN && it.closure.startMillis <= nowMillis + maxOf(CLOSURE_BANNER_HORIZON_MILLIS, leadMillis)
     } ?: hits.firstOrNull {
-        it.impact == ClosureImpact.NEARBY && it.closure.startMillis <= nowMillis + CLOSURE_ALERT_LEAD_MILLIS
+        it.impact == ClosureImpact.NEARBY && it.closure.startMillis <= nowMillis + leadMillis
     }
     return when {
         shown != null -> ClosureStatus.Affected(shown)
@@ -219,11 +224,15 @@ private fun ParkedState.closureMatchPoint(): LatLng =
     if (exactPinLat != null && exactPinLng != null) LatLng(exactPinLat, exactPinLng) else LatLng(parkedLat, parkedLng)
 
 /** The banner status for one parked car, from stored data only (no network). */
-suspend fun resolveClosureStatus(context: Context, parked: ParkedState, lastSyncMillis: Long?): ClosureStatus {
+suspend fun resolveClosureStatus(context: Context, parked: ParkedState, lastSyncMillis: Long?, leadMillis: Long): ClosureStatus {
     val now = System.currentTimeMillis()
     val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
-    return closureStatusFor(hits, closureDataIsUsable(lastSyncMillis, now), now)
+    return closureStatusFor(hits, closureDataIsUsable(lastSyncMillis, now), now, leadMillis)
 }
+
+/** The closure lead time currently set, in ms. */
+suspend fun closureLeadMillis(context: Context): Long =
+    SettingsRepository(context).closureAlertLeadHours.first() * 60 * 60_000L
 
 private fun closureAlertPendingIntent(context: Context, carId: Long, parkedAtMillis: Long?): PendingIntent {
     val intent = Intent(context, ClosureAlertReceiver::class.java).apply {
@@ -249,12 +258,18 @@ fun cancelClosureAlert(context: Context, carId: Long) {
  * Arms (or fires, or cancels) the closure alert for one parked car from the stored closure data.
  * Called only from armParkedState, under its mutex, so two runs can't post the same alert twice.
  * Never cancels a closure notification the user can see: the alert is about a real event either way.
+ * The one exception is [enabled] false (every closure feature switched off in Settings): then the
+ * alarm AND any closure notification go, the same as before closures existed.
  */
-internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carName: String) {
+internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carName: String, enabled: Boolean, leadMillis: Long) {
+    if (!enabled) {
+        cancelClosureAlert(context, parked.carId)
+        return
+    }
     val now = System.currentTimeMillis()
     val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
     val alarmManager = context.getSystemService(AlarmManager::class.java)
-    when (val plan = planClosureAlert(hits, parked.closureDeliveredForMillis, now)) {
+    when (val plan = planClosureAlert(hits, parked.closureDeliveredForMillis, now, leadMillis)) {
         ClosureAlertPlan.None -> alarmManager.cancel(closureAlertPendingIntent(context, parked.carId, null))
         is ClosureAlertPlan.ScheduleAt -> {
             Log.d(TAG, "car ${parked.carId}: closure ${plan.closure.objectId} alert at ${Instant.ofEpochMilli(plan.triggerMillis)}")
@@ -271,7 +286,7 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
                 AppDatabase.getInstance(context).parkedStateDao()
                     .markClosureDelivered(parked.carId, parked.parkedAtMillis, plan.closure.startMillis)
                 // Arm the NEXT closure, if any (its alert waits until this one has ended — see planClosureAlert).
-                val next = planClosureAlert(hits, plan.closure.startMillis, now)
+                val next = planClosureAlert(hits, plan.closure.startMillis, now, leadMillis)
                 if (next is ClosureAlertPlan.ScheduleAt) {
                     setAlarm(
                         alarmManager, canScheduleExactAlarmsCompat(context), next.triggerMillis,
@@ -376,8 +391,14 @@ object ClosureCheckCenter {
  * purpose: at the curb the phone is usually on cellular (spec §3).
  */
 private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parkedAtMillis: Long) {
-    val lastSync = SettingsRepository(context).closuresLastSyncMillis.first()
-    if (lastSync == null || System.currentTimeMillis() - lastSync > CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS) {
+    val settings = SettingsRepository(context)
+    // Both closure features off: nothing to do, exactly as before closures existed (the re-arm the
+    // save already ran has cancelled any closure alert). Park-time check off but Tier 2 on: no
+    // fetch here, but still re-arm and notify from the background-synced data.
+    if (!settings.closuresEnabled()) return
+    val lastSync = settings.closuresLastSyncMillis.first()
+    val fetchAllowed = settings.closureParkTimeCheck.first()
+    if (fetchAllowed && (lastSync == null || System.currentTimeMillis() - lastSync > CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS)) {
         try {
             withTimeout(CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS) { StreetClosureRepository(context).refreshFromNetwork() }
         } catch (e: TimeoutCancellationException) {
@@ -403,7 +424,7 @@ private suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, par
     val carName = db.carDao().getAll().firstOrNull { it.id == carId }?.name ?: "Your car"
     val now = System.currentTimeMillis()
     val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
-    val nearby = pickNearbyToNotifyOnPark(hits, now) ?: return
+    val nearby = pickNearbyToNotifyOnPark(hits, now, closureLeadMillis(context)) ?: return
     val (title, text) = closureNearbyContent(carName, nearby.closure, now)
     postClosureNotification(context, carId, NotificationIds.Purpose.CLOSURE_NEARBY, title, text)
     Log.d(TAG, "car $carId: nearby closure ${nearby.closure.objectId} notified at park time")

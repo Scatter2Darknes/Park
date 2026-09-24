@@ -37,13 +37,16 @@ fun CarWithStatus.soonestDeadline(): CarDeadline? {
 
 suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
     val db = AppDatabase.getInstance(context)
-    val closuresLastSync = SettingsRepository(context).closuresLastSyncMillis.first()
+    val settings = SettingsRepository(context)
+    val closuresEnabled = settings.closuresEnabled() // both closure features off = no closure line at all
+    val closuresLastSync = settings.closuresLastSyncMillis.first()
+    val closureLead = closureLeadMillis(context)
     return db.carDao().getAll().map { car ->
         val parked = db.parkedStateDao().getForCar(car.id)
         val rppDeadline = parked?.let { resolveRppDeadline(context, it, car) }
-        val closureStatus = parked?.let {
+        val closureStatus = parked?.takeIf { closuresEnabled }?.let {
             try {
-                resolveClosureStatus(context, it, closuresLastSync)
+                resolveClosureStatus(context, it, closuresLastSync, closureLead)
             } catch (e: Exception) {
                 android.util.Log.w("ClosureAlert", "Resolving closure status for car ${car.id} failed", e)
                 ClosureStatus.Unchecked // can't tell, so never "clear"

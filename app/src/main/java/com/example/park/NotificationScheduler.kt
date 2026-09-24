@@ -491,7 +491,12 @@ private suspend fun currentRppDeadline(
  *  not reentrant, so only the public entry points take it; the private helpers below don't. */
 private val armMutex = Mutex()
 
-private class ArmSettings(val reminderOffsetMillis: Long, val urgentOffsetMillis: Long?)
+private class ArmSettings(
+    val reminderOffsetMillis: Long,
+    val urgentOffsetMillis: Long?,
+    val closuresEnabled: Boolean,
+    val closureLeadMillis: Long
+)
 
 private suspend fun loadArmSettings(context: Context): ArmSettings {
     val settingsRepo = SettingsRepository(context)
@@ -500,7 +505,9 @@ private suspend fun loadArmSettings(context: Context): ArmSettings {
     val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
     return ArmSettings(
         reminderOffsetMillis = offsetMinutes * 60_000L,
-        urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
+        urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null,
+        closuresEnabled = settingsRepo.closuresEnabled(),
+        closureLeadMillis = closureLeadMillis(context)
     )
 }
 
@@ -587,7 +594,7 @@ private suspend fun armParkedState(
 
     // Street closures: independent of both families above, and never allowed to break them.
     try {
-        armClosureAlert(context, parked, car.name)
+        armClosureAlert(context, parked, car.name, settings.closuresEnabled, settings.closureLeadMillis)
     } catch (e: Exception) {
         android.util.Log.w("ClosureAlert", "Arming the closure alert for car ${parked.carId} failed", e)
     }
