@@ -32,8 +32,9 @@ import java.util.concurrent.ConcurrentHashMap
  * (ParkedState.closureDeliveredForMillis). It is armed from armParkedState, so everything that re-arms
  * sweep and RPP reminders (boot, app open, settings changes, data syncs, roll-forward) re-arms this too.
  *
- * Only BLOCKED_IN produces a notification. NEARBY is shown in the app (banner) but not notified:
- * with a 200 m radius, a daily Shared Space closure nearby would otherwise notify every day.
+ * BLOCKED_IN gets the scheduled alert above. NEARBY gets the banner line plus ONE notice per park,
+ * sent by the park-time check (owner decision, 2026-09-23): with a 200 m radius, alerting on every
+ * nearby closure would notify every day next to a daily Shared Space.
  */
 
 private const val TAG = "ClosureAlert"
@@ -100,6 +101,25 @@ fun planClosureAlert(
     val trigger = maxOf(next.startMillis - leadMillis, ongoingAlertedEnd ?: Long.MIN_VALUE)
     return if (trigger > nowMillis + DUE_TOLERANCE_MILLIS) ClosureAlertPlan.ScheduleAt(next, trigger)
     else ClosureAlertPlan.FireNow(next)
+}
+
+/**
+ * The nearby closure worth one notice right after parking, or null. Only closures not yet over that
+ * start within [leadMillis] count (the same window the banner uses). Null when a BLOCKED_IN closure
+ * is also due within that window: its own alert covers the spot, and two notices at once is noise.
+ */
+fun pickNearbyToNotifyOnPark(hits: List<ClosureHit>, nowMillis: Long, leadMillis: Long = CLOSURE_ALERT_LEAD_MILLIS): ClosureHit? {
+    fun soon(hit: ClosureHit) = hit.closure.endMillis > nowMillis && hit.closure.startMillis <= nowMillis + leadMillis
+    if (hits.any { it.impact == ClosureImpact.BLOCKED_IN && soon(it) }) return null
+    return hits.filter { it.impact == ClosureImpact.NEARBY && soon(it) }.minByOrNull { it.closure.startMillis }
+}
+
+/** Title and text for the one-per-park nearby notice. Informational only: never "move" or "towed". */
+fun closureNearbyContent(carName: String, closure: StreetClosure, nowMillis: Long): Pair<String, String> {
+    val what = closure.caseName?.let { " for $it" } ?: ""
+    val text = "${closurePlaceLabel(closure)} is closed$what, ${formatClosureWindow(closure, nowMillis)}. " +
+        "Check signs near your car."
+    return "$carName: street closure nearby" to text
 }
 
 /** Whether closure data last synced at [lastSyncMillis] is recent enough to say "checked". */
@@ -222,6 +242,7 @@ private fun closureAlertPendingIntent(context: Context, carId: Long, parkedAtMil
 fun cancelClosureAlert(context: Context, carId: Long) {
     context.getSystemService(AlarmManager::class.java).cancel(closureAlertPendingIntent(context, carId, null))
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.CLOSURE_ALERT))
+    NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.CLOSURE_NEARBY))
 }
 
 /**
@@ -246,7 +267,7 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
             alarmManager.cancel(closureAlertPendingIntent(context, parked.carId, null))
             val atSavedLocation = parked.segmentBlockSweepId == null
             val (title, text) = closureAlertContent(carName, plan.closure, atSavedLocation, now)
-            if (postClosureNotification(context, parked.carId, title, text)) {
+            if (postClosureNotification(context, parked.carId, NotificationIds.Purpose.CLOSURE_ALERT, title, text)) {
                 AppDatabase.getInstance(context).parkedStateDao()
                     .markClosureDelivered(parked.carId, parked.parkedAtMillis, plan.closure.startMillis)
                 // Arm the NEXT closure, if any (its alert waits until this one has ended — see planClosureAlert).
@@ -263,8 +284,14 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
 }
 
 /** Posts on the normal (standard-tier) channel. Returns false if notifications are blocked, so the marker isn't recorded. */
-private fun postClosureNotification(context: Context, carId: Long, title: String, text: String): Boolean {
-    val notificationId = NotificationIds.forCar(carId, NotificationIds.Purpose.CLOSURE_ALERT)
+private fun postClosureNotification(
+    context: Context,
+    carId: Long,
+    purpose: NotificationIds.Purpose,
+    title: String,
+    text: String
+): Boolean {
+    val notificationId = NotificationIds.forCar(carId, purpose)
     val contentIntent = Intent(context, MainActivity::class.java).apply {
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         putExtra("reminderCarId", carId)
@@ -362,5 +389,22 @@ private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parke
         }
     }
     recomputeParkedSchedule(context, carId, expectedParkedAtMillis = parkedAtMillis)
+    notifyNearbyClosureOnPark(context, carId, parkedAtMillis)
     BluetoothConnectionCenter.notifyParkedStateChanged() // redraw the banner with the result
+}
+
+/**
+ * The one-per-park nearby notice. Only ever called from the park-time check, which runs once per
+ * park, so it needs no delivery marker: re-arms (boot, app open, syncs) never repeat it.
+ */
+private suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, parkedAtMillis: Long) {
+    val db = AppDatabase.getInstance(context)
+    val parked = db.parkedStateDao().getForCar(carId)?.takeIf { it.parkedAtMillis == parkedAtMillis } ?: return // re-parked meanwhile
+    val carName = db.carDao().getAll().firstOrNull { it.id == carId }?.name ?: "Your car"
+    val now = System.currentTimeMillis()
+    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val nearby = pickNearbyToNotifyOnPark(hits, now) ?: return
+    val (title, text) = closureNearbyContent(carName, nearby.closure, now)
+    postClosureNotification(context, carId, NotificationIds.Purpose.CLOSURE_NEARBY, title, text)
+    Log.d(TAG, "car $carId: nearby closure ${nearby.closure.objectId} notified at park time")
 }

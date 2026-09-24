@@ -7,7 +7,7 @@
     python scripts/capture_logs.py --from-file logs\\old.txt     # digest a saved file instead of asking a device
 
 The full capture is saved as UTF-8 to logs/<timestamp>.txt (logs/ is gitignored: it can contain parking locations and
-car names - don't share it). It contains the app's own tags - Park, RppSync, DataSF, Tunnel, ParkBluetooth, ParkDebug -
+car names - don't share it). It contains the app's own tags - Park, RppSync, DataSF, Tunnel, ParkBluetooth, ParkDebug, ClosureSync, ClosureAlert -
 plus AndroidRuntime, followed by Android's crash buffer.
 
 The digest pulls out, with counts: parking saves, re-arm / recompute / roll-forward lines, BootReceiver, the
@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 
 from common import Adb, ScriptError, connect, repo_root, setup_console, timestamp
 
-TAGS = ["Park", "RppSync", "DataSF", "Tunnel", "AndroidRuntime", "ParkBluetooth", "ParkDebug"]
+TAGS = ["Park", "RppSync", "DataSF", "Tunnel", "AndroidRuntime", "ParkBluetooth", "ParkDebug", "ClosureSync", "ClosureAlert"]
 SINCE_FORMAT = re.compile(r"^\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,3})?$")
 
 # `logcat -v threadtime` lines:  09-20 19:36:31.762  4494  4530 I ParkDebug: message

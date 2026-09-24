@@ -59,7 +59,10 @@ object NotificationIds {
         METER_TIMER(10 * SPAN),
         /** Street-closure "blocked in" alert: its alarm's request code and its notification id
          *  (see ClosureAlerts.kt). One slot per car; alerts go out one closure at a time. */
-        CLOSURE_ALERT(11 * SPAN)
+        CLOSURE_ALERT(11 * SPAN),
+        /** The one-per-park "street closure nearby" notice (see ClosureAlerts.kt). Its own id so it
+         *  never replaces a "blocked in" alert for the same car. */
+        CLOSURE_NEARBY(12 * SPAN)
     }
 
     /**

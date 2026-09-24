@@ -259,6 +259,11 @@ still parked at closure start.
 - Radius: straight-line distance, ~150–250 m (1–2 blocks). One constant. Not street-graph.
 - **Standard** notification tier for both. Never urgent-tier. Wording must not read as "move or get
   towed".
+- **Decided (owner, 2026-09-23): how each is notified.** `BlockedIn`: a scheduled alert at the lead
+  time (fired at once if already inside it), one closure at a time. `Nearby`: the banner line plus
+  **one notification per park**, sent by the park-time check for the soonest nearby closure starting
+  within the lead time; skipped when a `BlockedIn` alert is also due within it. Never repeated by
+  re-arms, so a daily closure nearby can't notify every day.
 - **(corrected) Not a `scheduleTiers` family.** A closure isn't a deadline, so it doesn't go into
   `soonestDeadline()` or the sweep/RPP alarm slots. It needs its own one-shot alert at the lead
   time, re-armed from `armParkedState` like the others so it survives reboot and force-stop, with

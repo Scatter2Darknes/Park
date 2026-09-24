@@ -83,6 +83,42 @@ class ClosureAlertsTest {
         assertEquals(ClosureAlertPlan.FireNow(c), planClosureAlert(listOf(blocked(c)), null, now))
     }
 
+    // --- the one-per-park nearby notice ---
+
+    @Test
+    fun nearbyOnPark_picksTheSoonestNearbyWithinTheLeadTime() {
+        val soon = nearby(closure(startIn = 5 * hour, id = "soon"))
+        val sooner = nearby(closure(startIn = hour, id = "sooner"))
+        val tooFar = nearby(closure(startIn = 3 * day, id = "far"))
+        assertEquals(sooner, pickNearbyToNotifyOnPark(listOf(soon, tooFar, sooner), now))
+        assertNull(pickNearbyToNotifyOnPark(listOf(tooFar), now))
+        assertNull(pickNearbyToNotifyOnPark(emptyList(), now))
+    }
+
+    @Test
+    fun nearbyOnPark_includesOneAlreadyUnderWay_butNotOneThatEnded() {
+        val underWay = nearby(closure(startIn = -hour, id = "on"))
+        val ended = nearby(closure(startIn = -3 * hour, lengthMillis = hour, id = "ended"))
+        assertEquals(underWay, pickNearbyToNotifyOnPark(listOf(ended, underWay), now))
+    }
+
+    @Test
+    fun nearbyOnPark_staysQuietWhenABlockedInAlertCoversTheSpot() {
+        val near = nearby(closure(startIn = hour, id = "near"))
+        assertNull(pickNearbyToNotifyOnPark(listOf(near, blocked(closure(startIn = day, id = "block"))), now))
+        // A blocked-in closure far off doesn't suppress it: its alert won't go out for days.
+        assertEquals(near, pickNearbyToNotifyOnPark(listOf(near, blocked(closure(startIn = 5 * day, id = "later"))), now))
+    }
+
+    @Test
+    fun nearbyNotice_wording() {
+        val c = closure(startIn = 3 * day - hour)
+        val (title, text) = closureNearbyContent("Civic", c, now)
+        assertEquals("Civic: street closure nearby", title)
+        assertEquals("VALENCIA ST (16TH ST to 17TH ST) is closed for Street Fair, Sat, Sep 26 at 8:00 AM – 8:00 PM. Check signs near your car.", text)
+        assertFalse(text.contains("tow", ignoreCase = true))
+    }
+
     // --- banner status ---
 
     @Test
