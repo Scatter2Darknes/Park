@@ -24,6 +24,10 @@ class SavedLocationMarker(mapView: MapView) : Marker(mapView)
 class CountdownLabelMarker(mapView: MapView) : Marker(mapView)
 class RppZoneLabelMarker(mapView: MapView) : Marker(mapView)
 class MeterBadgeMarker(mapView: MapView) : Marker(mapView)
+// Street closures (see drawClosureOverlays): the "barrier tape" line along a closed block, and its
+// tappable 🚧 badge.
+class ClosureLinePolyline : Polyline()
+class ClosureBadgeMarker(mapView: MapView) : Marker(mapView)
 
 // The tap-feedback halo drawn under whichever segment was just tapped — see
 // showTappedSegmentHighlight. A distinct class (rather than reusing Polyline directly) so
@@ -63,6 +67,12 @@ private val RPP_ZONE_LABEL_COLOR_INT = android.graphics.Color.parseColor("#8E24A
 // independent axis (a curb can be swept AND RPP-zoned AND metered all at once), so it needs
 // its own color rather than borrowing either.
 private val METER_BADGE_COLOR_INT = android.graphics.Color.parseColor("#00838F")
+
+// Street closures: dark casing under orange dashes, like barrier tape. Deliberately unlike every
+// sweep line (solid, in the user's four status colours), because a closure is not a sweep status.
+private val CLOSURE_CASING_COLOR_INT = android.graphics.Color.parseColor("#212121")
+private val CLOSURE_DASH_COLOR_INT = android.graphics.Color.parseColor("#FF6D00")
+private const val MAX_CLOSURE_BADGES = 40
 
 // Keyed by a prefix ("car|"/"loc|") plus colorHex|icon|photoPath — styling rarely changes,
 // so repeated overlay refreshes (every debounced pan) reuse the same Bitmap instead of
@@ -1027,12 +1037,16 @@ suspend fun reloadSegmentsAndMarkers(
     showRppZoneLabels: Boolean = true,
     showMeterBadges: Boolean = true,
     onSegmentClick: (StreetSegment) -> Unit = {},
-    locationOverlay: MyLocationNewOverlay? = null
+    locationOverlay: MyLocationNewOverlay? = null,
+    onClosureClick: (ClosureBlock) -> Unit = {}
 ): Int {
     val nearbyCount = loadAndDrawSegments(
         mapView, context, centerPoint,
         radiusDegrees, isPinDropActive, thresholds, statusColors, showCountdownLabels, showRppZoneLabels, showMeterBadges, onSegmentClick
     )
+    // After the sweep lines (so closures sit on top of them) and before the pins (so car pins,
+    // saved locations and the location dot stay on top of closures).
+    drawClosureOverlays(mapView, context, centerPoint, radiusDegrees, isPinDropActive, onClosureClick)
     refreshParkedCarOverlays(mapView, context)
     refreshSavedLocationOverlays(mapView, context)
     locationOverlay?.let { overlay ->
@@ -1042,6 +1056,99 @@ suspend fun reloadSegmentsAndMarkers(
         }
     }
     return nearbyCount
+}
+
+/**
+ * Draws street closures near [centerPoint] (see ClosureMapLayer.kt for which ones): a
+ * "barrier tape" line along each closed block's centerline, and a 🚧 badge at its midpoint with
+ * the time until it starts. A block that affects a parked car is drawn heavier.
+ *
+ * Only the BADGES take taps (→ [onClosureClick]); the lines are purely visual, so tapping a street
+ * still opens its sweeping details as before. Like the segment hit-lines, a badge yields its tap
+ * while pin-drop is active. Badges are capped at [MAX_CLOSURE_BADGES], nearest the center first.
+ *
+ * Call it after the sweep lines are drawn and before the pins are re-added: reloadSegmentsAndMarkers
+ * does, and refreshClosureOverlays does it on its own for a closure-only redraw.
+ */
+suspend fun drawClosureOverlays(
+    mapView: MapView,
+    context: Context,
+    centerPoint: GeoPoint,
+    radiusDegrees: Double,
+    isPinDropActive: () -> Boolean,
+    onClosureClick: (ClosureBlock) -> Unit
+) {
+    mapView.overlays.removeAll { it is ClosureLinePolyline || it is ClosureBadgeMarker }
+    val center = LatLng(centerPoint.latitude, centerPoint.longitude)
+    val blocks = try {
+        loadClosureBlocksForMap(context, center, radiusDegrees)
+    } catch (e: Exception) {
+        android.util.Log.w("ClosureAlert", "Loading closures for the map failed", e)
+        emptyList()
+    }
+    val now = System.currentTimeMillis()
+    blocks.forEach { block ->
+        val geoPoints = block.points.map { GeoPoint(it.lat, it.lng) }
+        val heavy = block.affectsParkedCar
+        val casing = ClosureLinePolyline().apply {
+            setPoints(geoPoints)
+            outlinePaint.color = CLOSURE_CASING_COLOR_INT
+            outlinePaint.strokeWidth = if (heavy) 18f else 13f
+            outlinePaint.strokeCap = android.graphics.Paint.Cap.BUTT
+            outlinePaint.alpha = if (heavy) 230 else 170
+            setOnClickListener { _, _, _ -> false } // purely visual: taps reach the street underneath
+        }
+        val dashes = ClosureLinePolyline().apply {
+            setPoints(geoPoints)
+            outlinePaint.color = CLOSURE_DASH_COLOR_INT
+            outlinePaint.strokeWidth = if (heavy) 11f else 8f
+            outlinePaint.strokeCap = android.graphics.Paint.Cap.BUTT
+            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(22f, 16f), 0f)
+            setOnClickListener { _, _, _ -> false }
+        }
+        mapView.overlays.add(casing)
+        mapView.overlays.add(dashes)
+    }
+    blocks
+        .map { block -> block to midpointAlongPath(block.points) }
+        // The parked car's own closures always get their badge; then nearest the center.
+        .sortedWith(compareBy<Pair<ClosureBlock, LatLng>> { !it.first.affectsParkedCar }.thenBy { distanceMetersBetween(center, it.second) })
+        .take(MAX_CLOSURE_BADGES)
+        .forEach { (block, midpoint) ->
+            val badge = ClosureBadgeMarker(mapView).apply {
+                position = GeoPoint(midpoint.lat, midpoint.lng)
+                icon = buildCountdownLabelIcon(context, closureBadgeText(block, now), CLOSURE_CASING_COLOR_INT, compact = true)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                setOnMarkerClickListener { _, _ ->
+                    if (isPinDropActive()) false else { onClosureClick(block); true }
+                }
+            }
+            mapView.overlays.add(badge)
+        }
+    mapView.invalidate()
+}
+
+/**
+ * Redraws only the closures (e.g. right after a park-time closure check finished) and re-lifts the
+ * pins and location dot above them, the same way reloadSegmentsAndMarkers does.
+ */
+suspend fun refreshClosureOverlays(
+    mapView: MapView,
+    context: Context,
+    radiusDegrees: Double,
+    isPinDropActive: () -> Boolean,
+    onClosureClick: (ClosureBlock) -> Unit,
+    locationOverlay: MyLocationNewOverlay?
+) {
+    drawClosureOverlays(mapView, context, mapView.mapCenter as GeoPoint, radiusDegrees, isPinDropActive, onClosureClick)
+    refreshParkedCarOverlays(mapView, context)
+    refreshSavedLocationOverlays(mapView, context)
+    locationOverlay?.let { overlay ->
+        if (mapView.overlays.remove(overlay)) {
+            mapView.overlays.add(overlay)
+            mapView.invalidate()
+        }
+    }
 }
 
 // Not private: reused by ParkingMatcher's findSafeSavedLocation (matching against a saved

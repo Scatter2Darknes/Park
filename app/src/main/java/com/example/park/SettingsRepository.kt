@@ -64,6 +64,7 @@ object SettingsKeys {
     val TUNNEL_AUTO_DIM_ENABLED = booleanPreferencesKey("tunnel_auto_dim_enabled")
     val SHOW_RPP_ZONE_LABELS = booleanPreferencesKey("show_rpp_zone_labels")
     val SHOW_METER_BADGES = booleanPreferencesKey("show_meter_badges")
+    val SHOW_CLOSURES_LAYER = booleanPreferencesKey("show_closures_layer")
     val TILE_CACHE_MAX_MB = intPreferencesKey("tile_cache_max_mb")
     // "DRIVING:<carId>:<epochMillis>" or "PARKED:<carId>:<epochMillis>" — a short-lived record
     // of the most recent Bluetooth connect/disconnect, read by loadWidgetSummary so the widget
@@ -131,6 +132,7 @@ object SettingsDefaults {
     // appears while that meter is actually enforced right now, so it's inherently rarer and
     // more directly actionable than showing every metered post regardless of hours.
     const val SHOW_METER_BADGES = true
+    const val SHOW_CLOSURES_LAYER = true // on by default once Tier 2 is on (spec §5)
     const val TILE_CACHE_MAX_MB = 200
     // Street closures (docs/park-closures-spec.md §5). The park-time check is Tier 1, on by
     // default; background sync is Tier 2, off until the user opts in. With both off, the app
@@ -489,6 +491,20 @@ class SettingsRepository(private val context: Context) {
     suspend fun setShowMeterBadges(value: Boolean) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.SHOW_METER_BADGES] = value }
     }
+
+    /** The citywide street-closures map layer. Only takes effect with Tier 2 background sync on
+     *  (see closureMapLayerOn): a layer drawn from a days-old park-time download would look current
+     *  without being so (spec §4 "Map layer"). */
+    val showClosuresLayer: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.SHOW_CLOSURES_LAYER] ?: SettingsDefaults.SHOW_CLOSURES_LAYER
+    }
+
+    suspend fun setShowClosuresLayer(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.SHOW_CLOSURES_LAYER] = value }
+    }
+
+    /** Whether the citywide closures layer is actually drawn: its own switch AND Tier 2. */
+    suspend fun closureMapLayerOn(): Boolean = showClosuresLayer.first() && closureBackgroundSync.first()
 
     val tileCacheMaxMb: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[SettingsKeys.TILE_CACHE_MAX_MB] ?: SettingsDefaults.TILE_CACHE_MAX_MB
