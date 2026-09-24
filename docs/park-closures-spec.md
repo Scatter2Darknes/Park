@@ -359,7 +359,7 @@ Raw downloads were kept in a scratch folder outside the repo and not committed. 
 permits entered in the last few weeks. **Only 6 real permits are active or upcoming right now**
 (plus one junk row dated 2043–2046). Until SFMTA fixes this, a tow warning would almost never fire,
 and the app must not treat "no tow zone found" as "clear". Needs an owner decision (see
-the §8 note below) before Phase A is built.
+"What changes in the plan" below) before Phase A is built.
 
 Other findings, from the 15,851 rows entered since 2025-01-01:
 
