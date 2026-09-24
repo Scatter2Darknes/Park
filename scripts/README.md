@@ -81,7 +81,12 @@ python scripts\debug_hooks.py rearm                                       # the 
 python scripts\debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885   # fake street closure; alert in ~5 min
 python scripts\debug_hooks.py clear-closures                              # remove every fake closure, re-arm
 python scripts\debug_hooks.py reset-closure-offer                         # show the one-time background-sync offer again
+python scripts\debug_hooks.py inject-tow --car-id 1 --start-in-minutes 2885                      # fake tow zone; advance alert in ~5 min
+python scripts\debug_hooks.py inject-tow --car-id 1 --start-in-minutes 90 --feed-age-days 60     # plus "city tow data out of date"
+python scripts\debug_hooks.py clear-tow                                   # remove every fake tow zone, re-arm
 ```
+
+`inject-tow` puts a fake temporary tow zone on a parked car's block (its street segment; for a park with no segment, the nearest street within 25 m, which the app treats as an uncertain "check signs" match). Each day's window starts at the time of day `--start-in-minutes` from now and lasts `--duration-minutes` (default 10 h, must be under 24 h), for `--days` days (default 1). A confident match gets the advance alert 2 days (the lead time) before the first window, or at once if that's past, then the normal and urgent reminders at the usual offsets. `--feed-age-days N` also pretends the last tow sync ran now and the city's newest permit is N days old; over 7 the banner says the city's tow data may be out of date. `dump` prints each car's tow matches, deadline, markers and banner line, and counts the tow alarms. Both tow commands are emulator-only.
 
 `inject-closure` puts a fake street closure on a parked car's block (`--kind blocked`) or on a real street 60–190 m from the car's curb (`--kind nearby`; a straight line ~120 m north only if no street is in that range), starting `--start-in-minutes` from now (default 3 days) and lasting `--duration-minutes` (default 12 h). The "blocked in" alert goes out 2 days before the start, or at once if that's already past; `nearby` never notifies, it only shows in the banner. `dump` prints each car's closure marker and banner line. Both closure commands are emulator-only.
 

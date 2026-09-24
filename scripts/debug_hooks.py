@@ -8,6 +8,9 @@ reboot -> check again.
     python scripts/debug_hooks.py rearm                                  # the same re-arm the boot receiver runs
     python scripts/debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885
     python scripts/debug_hooks.py clear-closures
+    python scripts/debug_hooks.py inject-tow --car-id 1 --start-in-minutes 2885 --duration-minutes 600 --days 1
+    python scripts/debug_hooks.py inject-tow --car-id 1 --feed-age-days 60      # also pretend the city feed is stale
+    python scripts/debug_hooks.py clear-tow
 
 The receiver only exists in DEBUG builds (a release APK doesn't contain it - scripts/check_release_manifest.py proves
 that). It answers by writing to Logcat under the tag ParkDebug, which this script reads back and prints.
@@ -37,8 +40,8 @@ REPLY_TIMEOUT = 12.0
 # A point on 3rd Avenue (Richmond District, San Francisco) that has a street-sweeping segment, taken from the DataSF data.
 DEFAULT_LAT, DEFAULT_LNG = 37.7802, -122.4610
 
-# INJECT_CLOSURE extras: whole numbers go as --ei, the closure kind as a checked string.
-INT_EXTRAS = ("startInMinutes", "durationMinutes")
+# INJECT_CLOSURE / INJECT_TOW extras: whole numbers go as --ei, the closure kind as a checked string.
+INT_EXTRAS = ("startInMinutes", "durationMinutes", "days", "feedAgeDays")
 CLOSURE_KINDS = ("blocked", "nearby")
 
 
@@ -148,6 +151,29 @@ def clear_closures(adb: Adb) -> List[str]:
     return call(adb, "CLEAR_DEBUG_CLOSURES", "CLEAR_DEBUG_CLOSURES")
 
 
+def inject_tow(adb: Adb, car_id: int, start_in_minutes: int, duration_minutes: int, days: int,
+               feed_age_days: Optional[int] = None) -> List[str]:
+    """Put a fake temporary tow zone on a parked car's block, then re-arm it. With feed_age_days, also pretend the
+    city's tow feed was just synced and its newest permit is that many days old."""
+    require_emulator(adb, "inject-tow")
+    if not 1 <= duration_minutes < 24 * 60:
+        raise ScriptError(f"duration-minutes must be 1..1439 (a daily window under 24 h), got {duration_minutes}.")
+    if days < 1:
+        raise ScriptError(f"days must be at least 1, got {days}.")
+    extras = dict(carId=car_id, startInMinutes=start_in_minutes, durationMinutes=duration_minutes, days=days)
+    if feed_age_days is not None:
+        if feed_age_days < 0:
+            raise ScriptError(f"feed-age-days must be 0 or more, got {feed_age_days}.")
+        extras["feedAgeDays"] = feed_age_days
+    return call(adb, "INJECT_TOW", "INJECT_TOW", **extras)
+
+
+def clear_tow(adb: Adb) -> List[str]:
+    """Remove every fake tow zone INJECT_TOW added, then re-arm."""
+    require_emulator(adb, "clear-tow")
+    return call(adb, "CLEAR_DEBUG_TOW", "CLEAR_DEBUG_TOW")
+
+
 def reset_closure_offer(adb: Adb) -> List[str]:
     """Make the one-time 'keep checking for closures in the background?' offer show again after the next manual park."""
     require_emulator(adb, "reset-closure-offer")
@@ -180,6 +206,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="when it starts, from now (default 3 days; the alert goes out 2 days before the start)")
     c.add_argument("--duration-minutes", type=int, default=12 * 60)
     sub.add_parser("clear-closures", help="remove every fake closure and re-arm (emulator only)")
+    t = sub.add_parser("inject-tow", help="add a fake temporary tow zone on a parked car's block (emulator only)")
+    t.add_argument("--car-id", type=int, default=1)
+    t.add_argument("--start-in-minutes", type=int, default=3 * 24 * 60,
+                   help="when the first window starts, from now (default 3 days; the advance alert goes out 2 days before)")
+    t.add_argument("--duration-minutes", type=int, default=10 * 60, help="length of each day's window (under 24 h)")
+    t.add_argument("--days", type=int, default=1, help="how many days in a row the zone runs")
+    t.add_argument("--feed-age-days", type=int, default=None,
+                   help="also pretend the city's tow feed is this many days old (tests the out-of-date warning)")
+    sub.add_parser("clear-tow", help="remove every fake tow zone and re-arm (emulator only)")
     sub.add_parser("reset-closure-offer", help="let the one-time background closure offer show again (emulator only)")
     args = parser.parse_args(argv)
 
@@ -195,6 +230,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             lines = inject_closure(adb, args.car_id, args.kind, args.start_in_minutes, args.duration_minutes)
         elif args.command == "clear-closures":
             lines = clear_closures(adb)
+        elif args.command == "inject-tow":
+            lines = inject_tow(adb, args.car_id, args.start_in_minutes, args.duration_minutes, args.days, args.feed_age_days)
+        elif args.command == "clear-tow":
+            lines = clear_tow(adb)
         elif args.command == "reset-closure-offer":
             lines = reset_closure_offer(adb)
         else:

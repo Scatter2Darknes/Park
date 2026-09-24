@@ -158,13 +158,36 @@ class HooksTest(unittest.TestCase):
             debug_hooks.inject_closure(device, 9, "blocked", 10, 60)
         self.assertIn("need a PARKED carId", str(ctx.exception))
 
+    def test_inject_tow_sends_typed_extras_and_only_sends_feed_age_when_asked(self):
+        device = FakeDevice(replies={"INJECT_TOW": ["INJECT_TOW: debug-tow-1 street='FELL ST'"]})
+        debug_hooks.inject_tow(device, 3, 2885, 600, 2)
+        command = next(c for c in device.commands if c.startswith("am broadcast"))
+        self.assertIn("-a com.example.park.debug.INJECT_TOW", command)
+        self.assertIn("--el carId 3", command)
+        self.assertIn("--ei startInMinutes 2885", command)
+        self.assertIn("--ei durationMinutes 600", command)
+        self.assertIn("--ei days 2", command)
+        self.assertNotIn("feedAgeDays", command)
+        device = FakeDevice(replies={"INJECT_TOW": ["INJECT_TOW: debug-tow-2"]})
+        debug_hooks.inject_tow(device, 3, 10, 60, 1, feed_age_days=60)
+        self.assertIn("--ei feedAgeDays 60", next(c for c in device.commands if c.startswith("am broadcast")))
+
+    def test_inject_tow_refuses_bad_values_before_sending(self):
+        device = FakeDevice()
+        for kwargs in ({"duration_minutes": 0}, {"duration_minutes": 24 * 60}, {"days": 0}, {"feed_age_days": -1}):
+            args = {"start_in_minutes": 10, "duration_minutes": 60, "days": 1, **kwargs}
+            with self.assertRaises(ScriptError, msg=repr(kwargs)):
+                debug_hooks.inject_tow(device, 1, **args)
+        self.assertFalse([c for c in device.commands if c.startswith("am broadcast")])
+
     # ---- safety: anything that changes state is emulator-only ----
 
     def test_state_changing_hooks_refuse_a_physical_phone_before_sending_anything(self):
         phone = FakeDevice(serial="R52WA025A5R")
         for action in (lambda: debug_hooks.park(phone, 1, 37.78, -122.46), lambda: debug_hooks.unpark(phone, 1), lambda: debug_hooks.rearm(phone),
                        lambda: debug_hooks.inject_closure(phone, 1, "blocked", 10, 60), lambda: debug_hooks.clear_closures(phone),
-                       lambda: debug_hooks.reset_closure_offer(phone)):
+                       lambda: debug_hooks.reset_closure_offer(phone),
+                       lambda: debug_hooks.inject_tow(phone, 1, 10, 60, 1), lambda: debug_hooks.clear_tow(phone)):
             with self.assertRaises(ScriptError) as ctx:
                 action()
             self.assertIn("only runs on an emulator", str(ctx.exception))

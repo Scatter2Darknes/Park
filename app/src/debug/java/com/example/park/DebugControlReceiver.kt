@@ -34,6 +34,16 @@ import java.time.Instant
  * away (kind=nearby), starting startInMinutes from now (default 3 days, i.e. before the 2-day alert point) and
  * lasting durationMinutes (default 12 h), then re-arms that car. Fake rows have ids starting "debug-"; a real
  * closure sync removes them as unseen, and CLEAR_DEBUG_CLOSURES removes them directly.
+ *
+ *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.INJECT_TOW --el carId 1 --ei startInMinutes 2885 --ei durationMinutes 600 --ei days 1
+ *   adb shell am broadcast -n com.example.park/.DebugControlReceiver -a com.example.park.debug.CLEAR_DEBUG_TOW
+ *
+ * INJECT_TOW puts a fake temporary tow zone on the parked car's block (its street segment's CNN; for a park with
+ * no segment, the nearest street within TOW_UNCERTAIN_RADIUS_METERS, which the app then treats as an UNCERTAIN
+ * match). Each day's window starts at the time of day startInMinutes from now and lasts durationMinutes (under
+ * 24 h), for `days` days in a row, every weekday. Optional feedAgeDays (>= 0) also pretends the last tow sync ran
+ * just now and the feed's newest permit is that many days old, to test the "data may be out of date" wording.
+ * Fake rows have ids starting "debug-tow-"; CLEAR_DEBUG_TOW removes them.
  */
 class DebugControlReceiver : BroadcastReceiver() {
 
@@ -64,6 +74,14 @@ class DebugControlReceiver : BroadcastReceiver() {
                         durationMinutes = intent.getIntExtra("durationMinutes", 12 * 60)
                     )
                     ACTION_CLEAR_DEBUG_CLOSURES -> clearDebugClosures(app)
+                    ACTION_INJECT_TOW -> injectTow(
+                        app, carId,
+                        startInMinutes = intent.getIntExtra("startInMinutes", 3 * 24 * 60),
+                        durationMinutes = intent.getIntExtra("durationMinutes", 10 * 60),
+                        days = intent.getIntExtra("days", 1),
+                        feedAgeDays = intent.getIntExtra("feedAgeDays", -1)
+                    )
+                    ACTION_CLEAR_DEBUG_TOW -> clearDebugTow(app)
                     ACTION_RESET_CLOSURE_OFFER -> {
                         SettingsRepository(app).resetClosureTier2OfferShown()
                         Log.i(TAG, "RESET_CLOSURE_OFFER: the one-time background-sync offer will show after the next manual park " +
@@ -182,6 +200,58 @@ class DebugControlReceiver : BroadcastReceiver() {
         Log.i(TAG, "CLEAR_DEBUG_CLOSURES: removed $removed fake closure(s), re-armed")
     }
 
+    private suspend fun injectTow(context: Context, carId: Long, startInMinutes: Int, durationMinutes: Int, days: Int, feedAgeDays: Int) {
+        val db = AppDatabase.getInstance(context)
+        val parked = if (carId < 0) null else db.parkedStateDao().getForCar(carId)
+        if (parked == null || durationMinutes !in 1 until 24 * 60 || days < 1) {
+            Log.w(TAG, "INJECT_TOW rejected: need a PARKED carId (got $carId), durationMinutes 1..1439 (got $durationMinutes), days >= 1 (got $days)")
+            return
+        }
+        val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
+        // No segment: the nearest street, so the fake zone lands where findTowZonesForParkedCar looks (as UNCERTAIN).
+        val point = LatLng(parked.exactPinLat ?: parked.parkedLat, parked.exactPinLng ?: parked.parkedLng)
+        val street = segment ?: db.streetSegmentDao().getNearby(point.lat - 0.0005, point.lat + 0.0005, point.lng - 0.0005, point.lng + 0.0005)
+            .filter { it.cnn.isNotBlank() }
+            .minByOrNull { projectOntoPolyline(point, it.points)?.distanceMeters ?: Double.MAX_VALUE }
+        if (street == null || street.cnn.isBlank()) {
+            Log.w(TAG, "INJECT_TOW rejected: no street near car $carId to put a tow zone on")
+            return
+        }
+        val now = System.currentTimeMillis()
+        val start = Instant.ofEpochMilli(now + startInMinutes * 60_000L).atZone(SF_ZONE).toLocalDateTime()
+        val startMinute = start.hour * 60 + start.minute
+        val zone = TowZone(
+            rowId = "$DEBUG_TOW_ROW_PREFIX$now", caseNumber = "DEBUG", permitNumber = null,
+            cnns = towCnnList(listOf(street.cnn)), address = null, streetName = street.corridor,
+            fromStreet = null, toStreet = null,
+            startEpochDay = start.toLocalDate().toEpochDay(),
+            endEpochDay = start.toLocalDate().plusDays(days - 1L).toEpochDay(),
+            startMinute = startMinute, endMinute = (startMinute + durationMinutes) % (24 * 60),
+            allDay = false, daysMask = ALL_DAYS_MASK, daysText = "Monday - Sunday (debug)",
+            enteredMillis = now
+        )
+        db.towZoneDao().insertAll(listOf(zone))
+        if (feedAgeDays >= 0) {
+            val settings = SettingsRepository(context)
+            settings.setTowLastSyncMillis(now)
+            settings.setTowNewestEntryMillis(now - feedAgeDays * 24L * 60 * 60_000L)
+        }
+        recomputeParkedSchedule(context, carId)
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        val match = findTowZonesForParkedCar(context, parked).firstOrNull { it.zone.rowId == zone.rowId }?.match
+        val status = resolveTowStatus(context, parked, closureLeadMillis(context))
+        Log.i(TAG, "INJECT_TOW: ${zone.rowId} street='${street.corridor}' cnn=${street.cnn} match=$match " +
+                "first window ${start} for ${durationMinutes} min, $days day(s) " +
+                "-> deadline=${fmt(resolveTowDeadlineMillis(context, parked))} banner: ${towBannerText(status, System.currentTimeMillis())}")
+    }
+
+    private suspend fun clearDebugTow(context: Context) {
+        val removed = AppDatabase.getInstance(context).towZoneDao().deleteDebugRows()
+        rearmAllActiveReminders(context)
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        Log.i(TAG, "CLEAR_DEBUG_TOW: removed $removed fake tow zone(s), re-armed")
+    }
+
     private suspend fun rearm(context: Context) {
         // The same function BootReceiver and the app-foreground hook call.
         rearmAllActiveReminders(context)
@@ -240,6 +310,20 @@ class DebugControlReceiver : BroadcastReceiver() {
                     "dataLastSynced=${fmt(settings.closuresLastSyncMillis.first())} " +
                     "banner='${if (settings.closuresEnabled()) closureBannerText(closureStatus, nowMillis) else "(closures off)"}'")
 
+            val towDeadline = if (settings.towEnabled()) nextTowDeadline(confidentTowZones(context, parked, enabled = true), sfNow()) else null
+            val towAdvance = if (settings.towEnabled()) towAdvanceTarget(confidentTowZones(context, parked, enabled = true), sfNow()) else null
+            Log.i(TAG, "  tow: enabled=${settings.towEnabled()} matches=${findTowZonesForParkedCar(context, parked).joinToString { "${it.zone.rowId}/${it.match}" }} " +
+                    "deadline=${fmt(towDeadline?.startMillis)} advanceFor=${fmt(towAdvance?.startMillis)} " +
+                    "dataLastSynced=${fmt(settings.towLastSyncMillis.first())} newestPermit=${fmt(settings.towNewestEntryMillis.first())} " +
+                    "markers(n/u/adv)=${fmt(parked.towNormalDeliveredForMillis)}/${fmt(parked.towUrgentDeliveredForMillis)}/${fmt(parked.towAdvanceDeliveredForMillis)} " +
+                    "banner='${if (settings.towEnabled()) towBannerText(resolveTowStatus(context, parked, closureLeadMillis(context)), nowMillis) else "(tow off)"}'")
+            towDeadline?.let { deadline ->
+                expectedAlarms += expect("car ${parked.carId} tow reminder", deadline.startMillis - offsetMillis, nowMillis)
+                if (urgentMillis != null) expectedAlarms += expect("car ${parked.carId} tow URGENT reminder", deadline.startMillis - urgentMillis, nowMillis)
+                expectedAlarms += expect("car ${parked.carId} tow roll-forward", deadline.startMillis, nowMillis)
+            }
+            towAdvance?.let { expectedAlarms += expect("car ${parked.carId} tow ADVANCE alert", it.startMillis - closureLeadMillis(context), nowMillis) }
+
             parked.nextSweepAtMillis?.let { deadline ->
                 expectedAlarms += expect("car ${parked.carId} sweep reminder", deadline - offsetMillis, nowMillis)
                 if (urgentMillis != null) expectedAlarms += expect("car ${parked.carId} sweep URGENT reminder", deadline - urgentMillis, nowMillis)
@@ -285,5 +369,7 @@ class DebugControlReceiver : BroadcastReceiver() {
         const val ACTION_INJECT_CLOSURE = "com.example.park.debug.INJECT_CLOSURE"
         const val ACTION_CLEAR_DEBUG_CLOSURES = "com.example.park.debug.CLEAR_DEBUG_CLOSURES"
         const val ACTION_RESET_CLOSURE_OFFER = "com.example.park.debug.RESET_CLOSURE_OFFER"
+        const val ACTION_INJECT_TOW = "com.example.park.debug.INJECT_TOW"
+        const val ACTION_CLEAR_DEBUG_TOW = "com.example.park.debug.CLEAR_DEBUG_TOW"
     }
 }
