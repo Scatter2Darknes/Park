@@ -361,7 +361,9 @@ Every new setting also goes into `DataBackup.kt` export/import, like `wifiOnlyRe
 
 **Status (2026-09-24):** step 7 built (branches `closures-*`). Step 4 (Tow Zones) built on branch `tow-zones`
 **with the out-of-date warning** (owner decision, 2026-09-24), while the feed is still stale — see §10. Step 6 (overlap
-test) still waits for a current tow feed.
+test): `scripts/overlap_check.py` is ready and refuses a verdict while the tow feed is stale. First run 2026-09-24
+(`--force`): 0 of 3,975 closure rows (283 cases) overlap any of the 7 live tow zones — a floor, not an answer. Re-run
+it once the tow feed's newest permit is recent; its result decides whether the §4 merge rule gets built.
 
 ---
 

@@ -10,6 +10,7 @@ Small Python 3 scripts (standard library only - nothing to install) that replace
 | `capture_logs.py` (A5) | saves Park's Logcat to `logs/` and prints a digest | no |
 | `debug_hooks.py` (A6) | parks / unparks / re-arms / dumps state via the debug-only receiver | yes (emulator only), except `dump` |
 | `check_release_manifest.py` (A6) | proves a release APK contains no debug receiver | no |
+| `overlap_check.py` | how often SFMTA street closures and tow zones overlap (closures spec §4) | no device at all |
 | `common.py` (A1) | shared helpers (not run directly) | - |
 
 ## Safety rules (the scripts and their tests enforce these)
@@ -25,6 +26,13 @@ Small Python 3 scripts (standard library only - nothing to install) that replace
 ## The scripts
 
 **`common.py`** (A1) - not run directly. Finds `adb` (`--adb`, then `ANDROID_HOME`, then `PATH`, then Android Studio's default folder `%LOCALAPPDATA%\Android\Sdk\platform-tools`), chooses the target device under the rules above, runs every `adb` command with `-s <serial>`, decodes output as UTF-8 (so em dashes aren't garbled), and fails loudly on a non-zero exit. The "Target: ..." notice goes to stderr so a script's real output stays clean for piping. Other helpers: the typed confirmation (no input counts as a refusal) and the guarded temp-file delete.
+
+**`overlap_check.py`** - the closures spec's "overlap test" (§4): downloads both public DataSF feeds citywide (street closures `8x25-yybr`, tow zones `6r5h-j298`) and counts closures that have a tow zone on the same block (CNN) with enforcement hours intersecting the closure, and how much of the closure the tow hours cover (exact = 95%+). No phone or emulator. It refuses a verdict (exit 2) while the tow feed is stale - newest permit over 7 days old, as since July 2026 - because the count would only measure the broken feed; `--force` reports anyway. `--save-dir` keeps the raw downloads, `--from-dir` re-runs on them offline.
+
+```
+python scripts\overlap_check.py            # the verdict, once the tow feed is current again
+python scripts\overlap_check.py --force    # numbers now, as a floor
+```
 
 **`backup_db.py`** (A2) - copies `databases/park_database` (+ `-wal`, `-shm`) and `files/datastore/*.preferences_pb` to `backups/<yyyy-MM-dd_HHmmss>/` and verifies them.
 
