@@ -17,15 +17,17 @@ Working document for Claude Code. Produced from a static code review plus an arc
 | Task | Branch | State |
 |---|---|---|
 | T0 `holidays` flag check (Z runs a query) | n/a | done (run by Claude on raw data; assumption disproved — see Decisions log and `docs/investigations/F1-raw-data-findings.md`) |
-| T1 Re-arm + delivery markers (Room v12) | `rearm-reminders` | code done; awaiting device test |
-| T2 Exact-alarm flow | `exact-alarm-flow` | code done; awaiting device test |
-| T3 Schedule recompute, roll-forward, active-window notice | `schedule-recompute` | code done; awaiting device test |
-| T4 Bluetooth notification channel + timeouts | `bt-notif-timeouts` | code done; awaiting device test |
-| T5 Tunnel detection | `tunnel-detection` | code done; awaiting device test |
-| T6 Sweep-logic tests | `sweep-tests` | done (JVM tests pass) |
-| T7 RPP fixes | `rpp-fixes` | done (JVM tests pass) |
-| T8 Stale-row cleanup | `stale-rows` | code done; migration test passed on emulator |
-| T9 Build + hygiene | `build-hygiene` | code done; release APK smoke-tested on emulator, awaiting device test |
+| T1 Re-arm + delivery markers (Room v12) | `rearm-reminders` | done; merged in v1.03. Boot re-arm verified on the S25 (`rearm_check --mode boot` passes, 2026-09-24) |
+| T2 Exact-alarm flow | `exact-alarm-flow` | done; merged in v1.03 |
+| T3 Schedule recompute, roll-forward, active-window notice | `schedule-recompute` | done; merged in v1.03 |
+| T4 Bluetooth notification channel + timeouts | `bt-notif-timeouts` | done; merged in v1.03 |
+| T5 Tunnel detection | `tunnel-detection` | done; merged in v1.03 |
+| T6 Sweep-logic tests | `sweep-tests` | done (JVM tests pass); merged in v1.03 |
+| T7 RPP fixes | `rpp-fixes` | done (JVM tests pass); merged in v1.03 |
+| T8 Stale-row cleanup | `stale-rows` | done; migration test passed on emulator; merged in v1.03 |
+| T9 Build + hygiene | `build-hygiene` | done; release APK checked clean again 2026-09-24; merged in v1.03 |
+
+All T tasks shipped in v1.03 (`main`, merged by Z). The feature branches were deleted locally on 2026-09-24; the history is in `main`.
 
 ### Invariants: do not regress
 

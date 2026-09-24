@@ -25,10 +25,12 @@ Goal: replace the manual "run an adb command, paste the output, decode it by han
 | A1 Shared helpers + guard test | `automation-scripts` | done (Python, not PowerShell: Z's choice) |
 | A2 `backup-db` | same | done; verified on emulator |
 | A3 `alarms` (decoder) | same | done; verified on emulator |
-| A4 `rearm-check` (boot and foreground modes) | same | done; both modes PASS on emulator |
+| A4 `rearm-check` (boot and foreground modes) | same | done; both modes PASS on emulator; boot mode passes on the S25 (2026-09-24) |
 | A5 `capture-logs` | same | done; verified on emulator |
 | A6 Debug-only control receiver (optional) | `debug-hooks` | done; release APK checked clean |
-| A7 CI on push | `ci` | done locally; never run on GitHub (not pushed) |
+| A7 CI on push | `ci` | done; merged in v1.03 and pushed. Whether the GitHub run is green hasn't been checked here: see the Actions tab |
+
+All A tasks shipped in v1.03 (`main`).
 
 None of it has run on a physical phone yet. Details: `docs/StatusUpdate-Automation.md`.
 

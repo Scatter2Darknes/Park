@@ -16,11 +16,11 @@ Continuation of `docs/ReliabilityPlan.md`. Read that file's "How to work" and "I
 |---|---|---|
 | F0 Housekeeping | (with F2) | done |
 | F1 Raw-data investigation (report only) | none | done (`docs/investigations/F1-raw-data-findings.md`) |
-| F2 Notification ID collision | `notif-id-ranges` | code done; awaiting device test |
+| F2 Notification ID collision | `notif-id-ranges` | done; merged in v1.03 |
 | F3 Sweep-search performance check | `sweep-perf` | done (no optimization needed; benchmark committed as a test) |
-| F4 RPP `HRLIMIT` 0/null handling | `rpp-zero-limit` | code done (Z chose "assume 2 h, labelled"); awaiting device test |
+| F4 RPP `HRLIMIT` 0/null handling | `rpp-zero-limit` | done (Z chose "assume 2 h, labelled"); merged in v1.03 |
 | F5 `HOLIDAY` route rows | `curb-merge` | done via F6 (the `HOLIDAY` rows are redundant with the day rows); no `holiday-rows` branch |
-| F6 A curb is one schedule (found by F1) | `curb-merge` | code done; awaiting device test |
+| F6 A curb is one schedule (found by F1) | `curb-merge` | done; merged in v1.03. The block details sheet now also shows the whole curb (v1.04) |
 
 Details: `docs/StatusUpdate-FollowUpPass.md`.
 

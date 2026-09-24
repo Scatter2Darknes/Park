@@ -17,8 +17,8 @@ On Z's S25, `POST_NOTIFICATIONS` was **denied** (`granted=false, flags=[USER_SET
 
 | Task | Branch | State |
 |---|---|---|
-| P1 Notifications-blocked banner + Settings row | `notif-blocked-banner` | code done; verified on emulator, awaiting S25 check |
-| P1b Contextual permission request at first park (optional) | `notif-permission-at-park` | done (Z: yes, 2026-09-24); verified by Z on an API 33+ emulator (asks once, "Not now" isn't repeated, reset-notification-ask brings it back). Not yet checked: API 29 (should never ask) and the phones |
+| P1 Notifications-blocked banner + Settings row | `notif-blocked-banner` | done; verified on emulator; merged in v1.03 |
+| P1b Contextual permission request at first park (optional) | `notif-permission-at-park` | done (Z: yes, 2026-09-24); verified by Z on an API 33+ emulator (asks once, "Not now" isn't repeated, reset-notification-ask brings it back) and on the S25 (v1.04 checklist, 2026-09-24); merged in v1.04. Not yet checked: API 29 / the S9 (should never ask) |
 | P2 Script/digest updates | same | done; verified on emulator |
 | P3 Boot-missed detector | `boot-missed-detector` | **not built**: Z's further `rearm_check --mode boot` runs pass (2026-09-24). Revisit only if a boot failure comes back. |
 
