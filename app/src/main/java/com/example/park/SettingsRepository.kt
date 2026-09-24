@@ -579,6 +579,11 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs -> prefs[SettingsKeys.CLOSURE_TIER2_OFFER_SHOWN] = true }
     }
 
+    /** Debug builds only (DebugControlReceiver's RESET_CLOSURE_OFFER): makes the one-time offer appear again. */
+    suspend fun resetClosureTier2OfferShown() {
+        context.dataStore.edit { prefs -> prefs.remove(SettingsKeys.CLOSURE_TIER2_OFFER_SHOWN) }
+    }
+
     /**
      * One-shot read of both color thresholds, for use where a continuously-observed Flow
      * isn't worth the complexity (MapScreen fully remounts when navigating back from

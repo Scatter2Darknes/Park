@@ -17,6 +17,7 @@
                 <action android:name="com.example.park.debug.REARM" />
                 <action android:name="com.example.park.debug.INJECT_CLOSURE" />
                 <action android:name="com.example.park.debug.CLEAR_DEBUG_CLOSURES" />
+                <action android:name="com.example.park.debug.RESET_CLOSURE_OFFER" />
             </intent-filter>
         </receiver>
     </application>

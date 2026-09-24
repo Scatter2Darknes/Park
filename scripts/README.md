@@ -80,6 +80,7 @@ python scripts\debug_hooks.py unpark --car-id 1
 python scripts\debug_hooks.py rearm                                       # the re-arm BootReceiver runs
 python scripts\debug_hooks.py inject-closure --car-id 1 --kind blocked --start-in-minutes 2885   # fake street closure; alert in ~5 min
 python scripts\debug_hooks.py clear-closures                              # remove every fake closure, re-arm
+python scripts\debug_hooks.py reset-closure-offer                         # show the one-time background-sync offer again
 ```
 
 `inject-closure` puts a fake street closure on a parked car's block (`--kind blocked`) or about 120 m away (`--kind nearby`), starting `--start-in-minutes` from now (default 3 days) and lasting `--duration-minutes` (default 12 h). The "blocked in" alert goes out 2 days before the start, or at once if that's already past; `nearby` never notifies, it only shows in the banner. `dump` prints each car's closure marker and banner line. Both closure commands are emulator-only.

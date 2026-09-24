@@ -163,7 +163,8 @@ class HooksTest(unittest.TestCase):
     def test_state_changing_hooks_refuse_a_physical_phone_before_sending_anything(self):
         phone = FakeDevice(serial="R52WA025A5R")
         for action in (lambda: debug_hooks.park(phone, 1, 37.78, -122.46), lambda: debug_hooks.unpark(phone, 1), lambda: debug_hooks.rearm(phone),
-                       lambda: debug_hooks.inject_closure(phone, 1, "blocked", 10, 60), lambda: debug_hooks.clear_closures(phone)):
+                       lambda: debug_hooks.inject_closure(phone, 1, "blocked", 10, 60), lambda: debug_hooks.clear_closures(phone),
+                       lambda: debug_hooks.reset_closure_offer(phone)):
             with self.assertRaises(ScriptError) as ctx:
                 action()
             self.assertIn("only runs on an emulator", str(ctx.exception))

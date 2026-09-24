@@ -64,6 +64,11 @@ class DebugControlReceiver : BroadcastReceiver() {
                         durationMinutes = intent.getIntExtra("durationMinutes", 12 * 60)
                     )
                     ACTION_CLEAR_DEBUG_CLOSURES -> clearDebugClosures(app)
+                    ACTION_RESET_CLOSURE_OFFER -> {
+                        SettingsRepository(app).resetClosureTier2OfferShown()
+                        Log.i(TAG, "RESET_CLOSURE_OFFER: the one-time background-sync offer will show after the next manual park " +
+                                "(if background sync is off)")
+                    }
                     else -> Log.w(TAG, "unknown action $action")
                 }
             } catch (e: Exception) {
@@ -255,5 +260,6 @@ class DebugControlReceiver : BroadcastReceiver() {
         const val ACTION_REARM = "com.example.park.debug.REARM"
         const val ACTION_INJECT_CLOSURE = "com.example.park.debug.INJECT_CLOSURE"
         const val ACTION_CLEAR_DEBUG_CLOSURES = "com.example.park.debug.CLEAR_DEBUG_CLOSURES"
+        const val ACTION_RESET_CLOSURE_OFFER = "com.example.park.debug.RESET_CLOSURE_OFFER"
     }
 }

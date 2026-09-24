@@ -148,6 +148,12 @@ def clear_closures(adb: Adb) -> List[str]:
     return call(adb, "CLEAR_DEBUG_CLOSURES", "CLEAR_DEBUG_CLOSURES")
 
 
+def reset_closure_offer(adb: Adb) -> List[str]:
+    """Make the one-time 'keep checking for closures in the background?' offer show again after the next manual park."""
+    require_emulator(adb, "reset-closure-offer")
+    return call(adb, "RESET_CLOSURE_OFFER", "RESET_CLOSURE_OFFER")
+
+
 def message_of(line: str) -> str:
     """The text after 'ParkDebug:' in a threadtime line."""
     return line.split(f"{TAG}:", 1)[1].strip() if f"{TAG}:" in line else line
@@ -174,6 +180,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="when it starts, from now (default 3 days; the alert goes out 2 days before the start)")
     c.add_argument("--duration-minutes", type=int, default=12 * 60)
     sub.add_parser("clear-closures", help="remove every fake closure and re-arm (emulator only)")
+    sub.add_parser("reset-closure-offer", help="let the one-time background closure offer show again (emulator only)")
     args = parser.parse_args(argv)
 
     try:
@@ -188,6 +195,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             lines = inject_closure(adb, args.car_id, args.kind, args.start_in_minutes, args.duration_minutes)
         elif args.command == "clear-closures":
             lines = clear_closures(adb)
+        elif args.command == "reset-closure-offer":
+            lines = reset_closure_offer(adb)
         else:
             lines = rearm(adb)
     except ScriptError as exc:

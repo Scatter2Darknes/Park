@@ -309,17 +309,18 @@ fun MapScreen(
      * Every MANUAL park in the flow below ends here, after its save: redraw the parked-car markers
      * and the banner, close the flow, and — the first time only — offer Tier 2 background closure
      * checks. Bluetooth auto-parks never come through here (no screen to show the offer on), so they
-     * don't use it up. "Shown" is recorded as the offer appears, so it can't reappear either way.
+     * don't use it up. "Shown" is recorded by the dialog itself once it is actually on screen (see
+     * its LaunchedEffect), so a dialog that never appeared can't use the offer up.
      */
     suspend fun finishManualPark() {
         mapViewRef?.let { mv -> refreshParkedCarOverlays(mv, context) }
         refreshActiveParkedCars()
         parkingFlowState = ParkingFlowState.Hidden
         val settings = SettingsRepository(context)
-        if (!settings.closureTier2OfferShown.first() && !settings.closureBackgroundSync.first()) {
-            settings.setClosureTier2OfferShown()
-            showClosureTier2Offer = true
-        }
+        val alreadyShown = settings.closureTier2OfferShown.first()
+        val backgroundOn = settings.closureBackgroundSync.first()
+        android.util.Log.d("ClosureAlert", "Tier 2 offer after manual park: alreadyShown=$alreadyShown backgroundOn=$backgroundOn -> show=${!alreadyShown && !backgroundOn}")
+        if (!alreadyShown && !backgroundOn) showClosureTier2Offer = true
     }
 
     // Settings-backed state. Loaded once on entry — MapScreen fully remounts when
@@ -1654,6 +1655,11 @@ fun MapScreen(
             })
         }
         if (showClosureTier2Offer) {
+            // Runs once when the dialog enters the screen: only now is the offer used up.
+            LaunchedEffect(Unit) {
+                SettingsRepository(context).setClosureTier2OfferShown()
+                android.util.Log.d("ClosureAlert", "Tier 2 offer shown (recorded; it won't appear again)")
+            }
             AlertDialog(
                 onDismissRequest = { showClosureTier2Offer = false },
                 title = { Text("Keep checking for street closures?") },
