@@ -61,15 +61,21 @@ fun classifyClosure(closure: StreetClosure, parkedCnn: String?, point: LatLng): 
 
 /**
  * Where a parked car is, for closure matching. In order:
- *  1. [exactPin]: the user pinned the car (their location, or a pin dropped by hand);
+ *  1. [exactPin]: the user pinned the car — but only if it agrees with the curb they chose
+ *     ([pinToCurbMeters] within PIN_FAR_FROM_CURB_METERS), or there is no curb;
  *  2. [curbMidpoint]: the middle of the curb they chose — NOT the GPS point the parking flow started
  *     from, which is where the phone was, and after "pick manually / select from map" can be far
  *     from the car (the same reason saveParkedState matches RPP from the curb);
  *  3. [parkedPoint]: a park with no curb (garage, "no street nearby"), where the saved point is all
  *     there is.
+ * A pin far from the chosen curb (the user kept both after the parking flow warned them) loses to
+ * the curb: sweep and RPP reminders follow the street, so closures do too, and the car never gets
+ * alerts about two different places.
  */
-fun closureMatchOrigin(exactPin: LatLng?, curbMidpoint: LatLng?, parkedPoint: LatLng): LatLng =
-    exactPin ?: curbMidpoint ?: parkedPoint
+fun closureMatchOrigin(exactPin: LatLng?, curbMidpoint: LatLng?, parkedPoint: LatLng, pinToCurbMeters: Double? = null): LatLng {
+    val pinAgreesWithCurb = curbMidpoint == null || (pinToCurbMeters != null && pinToCurbMeters <= PIN_FAR_FROM_CURB_METERS)
+    return exactPin?.takeIf { pinAgreesWithCurb } ?: curbMidpoint ?: exactPin ?: parkedPoint
+}
 
 /**
  * Every closure that affects [parked], not yet over at [nowMillis], BLOCKED_IN first, then by start
@@ -84,11 +90,13 @@ suspend fun findClosuresForParkedCar(
     val db = AppDatabase.getInstance(context)
     val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
     val parkedCnn = segment?.cnn?.takeIf { it.isNotBlank() }
+    val pin = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng) else null
+    val curbSegment = segment?.takeIf { it.points.size >= 2 }
     val point = closureMatchOrigin(
-        exactPin = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng) else null,
-        curbMidpoint = segment?.takeIf { it.points.size >= 2 }
-            ?.let { midpointAlongPath(offsetPolylineForSide(it.points, it.cnnRightLeft)) },
-        parkedPoint = LatLng(parked.parkedLat, parked.parkedLng)
+        exactPin = pin,
+        curbMidpoint = curbSegment?.let { midpointAlongPath(offsetPolylineForSide(it.points, it.cnnRightLeft)) },
+        parkedPoint = LatLng(parked.parkedLat, parked.parkedLng),
+        pinToCurbMeters = if (pin != null && curbSegment != null) pinDistanceFromCurbMeters(curbSegment, pin) else null
     )
     val candidates = db.streetClosureDao().getNearby(
         nowMillis,

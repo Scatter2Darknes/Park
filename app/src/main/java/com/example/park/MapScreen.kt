@@ -337,6 +337,37 @@ fun MapScreen(
         closureOfferVisible = true
     }
 
+    /**
+     * Every manual park WITH a pin goes through here. A pin more than PIN_FAR_FROM_CURB_METERS from
+     * the chosen curb contradicts the chosen street, so the user is asked first (PinFarFromStreet)
+     * instead of saving two places that disagree. [checkDistance] false = they chose "Keep both".
+     * [offerMeterAfter] keeps DroppingPin's existing meter-timer check for the dropped pin.
+     */
+    suspend fun parkWithPin(
+        carId: Long,
+        segment: StreetSegment,
+        point: LatLng,
+        pin: LatLng,
+        offerMeterAfter: Boolean,
+        checkDistance: Boolean = true
+    ) {
+        val distance = pinDistanceFromCurbMeters(segment, pin)
+        if (checkDistance && distance > PIN_FAR_FROM_CURB_METERS) {
+            parkingFlowState = ParkingFlowState.PinFarFromStreet(carId, segment, point, pin, distance, offerMeterAfter)
+            return
+        }
+        if (offerMeterAfter) {
+            // Defer the save to AskingForMeterTimer's own buttons (avoids saving twice).
+            val meter = findConfidentMeteredMatch(context, pin)
+            if (meter != null) {
+                parkingFlowState = ParkingFlowState.AskingForMeterTimer(carId, segment, point, meter, exactPin = pin)
+                return
+            }
+        }
+        saveParkedState(context, carId, segment, point, pin.lat, pin.lng)
+        finishManualPark(carId)
+    }
+
     // Back / Cancel for every parking-flow step. Leaving a map-tap step also has to undo what it
     // set up: the pin-drop tap hook and the tapped-street highlight.
     fun leaveParkingStep() {
@@ -1807,11 +1838,11 @@ fun MapScreen(
                     onConfirm = { dropPin ->
                         scope.launch {
                             if (dropPin) {
-                                saveParkedState(context, state.carId, state.match.segment, state.point, state.point.lat, state.point.lng)
+                                parkWithPin(state.carId, state.match.segment, state.point, pin = state.point, offerMeterAfter = false)
                             } else {
                                 saveParkedState(context, state.carId, state.match.segment, state.point)
+                                finishManualPark(state.carId)
                             }
-                            finishManualPark(state.carId)
                         }
                     },
                     onReject = {
@@ -1848,11 +1879,12 @@ fun MapScreen(
                         mapViewRef?.let { mv -> clearTappedSegmentHighlight(mv) }
                         scope.launch {
                             if (dropPin) {
-                                saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
+                                // The tapped street can be anywhere on the map; the pin is the phone's location.
+                                parkWithPin(state.carId, state.segment, state.point, pin = state.point, offerMeterAfter = false)
                             } else {
                                 saveParkedState(context, state.carId, state.segment, state.point)
+                                finishManualPark(state.carId)
                             }
-                            finishManualPark(state.carId)
                         }
                     },
                     onReject = {
@@ -1900,8 +1932,7 @@ fun MapScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             TextButton(onClick = {
                                 scope.launch {
-                                    saveParkedState(context, state.carId, state.segment, state.point, state.point.lat, state.point.lng)
-                                    finishManualPark(state.carId)
+                                    parkWithPin(state.carId, state.segment, state.point, pin = state.point, offerMeterAfter = false)
                                 }
                             }) { Text("Yes, pin my current location") }
                             TextButton(onClick = {
@@ -1985,30 +2016,46 @@ fun MapScreen(
                         scope.launch {
                             pinDropCallback = null
                             val droppedPoint = LatLng(tappedPoint.latitude, tappedPoint.longitude)
-                            // Re-checked against the DROPPED pin, not state.originalPoint —
-                            // this is exactly the case AskingForPin's own one-time meter check
-                            // (run against the original, possibly-imprecise GPS point before
-                            // this manual correction) can miss. Found: defer the actual save to
-                            // AskingForMeterTimer's own buttons (avoids saving twice); not
-                            // found: save immediately as before.
-                            val meter = findConfidentMeteredMatch(context, droppedPoint)
-                            if (meter != null) {
-                                parkingFlowState = ParkingFlowState.AskingForMeterTimer(
-                                    state.carId, state.segment, state.originalPoint, meter, exactPin = droppedPoint
-                                )
-                            } else {
-                                saveParkedState(
-                                    context, state.carId, state.segment, state.originalPoint,
-                                    tappedPoint.latitude, tappedPoint.longitude
-                                )
-                                finishManualPark(state.carId)
-                            }
+                            // First: is the dropped pin anywhere near the chosen street? Then the
+                            // meter check, re-run against the DROPPED pin, not state.originalPoint —
+                            // exactly the case AskingForPin's own one-time meter check (run against
+                            // the original, possibly-imprecise GPS point) can miss. Both in parkWithPin.
+                            parkWithPin(state.carId, state.segment, state.originalPoint, pin = droppedPoint, offerMeterAfter = true)
                         }
                     }
                 }
                 MapInstructionBanner(text = "Tap the map to drop your pin")
                 BottomCancelPill(onCancel = { parkingFlowCancel() }, onBack = parkingFlowBackOrNull())
             }
+            is ParkingFlowState.PinFarFromStreet -> AlertDialog(
+                onDismissRequest = { parkingFlowCancel() },
+                title = { Text("Pin is far from your street") },
+                text = {
+                    Column {
+                        Text(
+                            "Your pin is ${formatDistanceMeters(state.distanceMeters)} from ${state.segment.corridor}, " +
+                                    "the street you picked. Reminders follow the street."
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = {
+                            parkingFlowState = ParkingFlowState.DroppingPin(state.carId, state.segment, state.point)
+                        }) { Text("Drop the pin again") }
+                        TextButton(onClick = {
+                            scope.launch {
+                                saveParkedState(context, state.carId, state.segment, state.point)
+                                finishManualPark(state.carId)
+                            }
+                        }) { Text("Park without a pin") }
+                        TextButton(onClick = {
+                            scope.launch {
+                                parkWithPin(state.carId, state.segment, state.point, state.pin, state.offerMeterAfter, checkDistance = false)
+                            }
+                        }) { Text("Keep both") }
+                        FlowNavRow(parkingFlowBackOrNull(), onCancel = { parkingFlowCancel() })
+                    }
+                },
+                confirmButton = {}
+            )
             is ParkingFlowState.PickingManually -> ManualSegmentPicker(
                 candidates = state.candidates,
                 onPick = { segment ->

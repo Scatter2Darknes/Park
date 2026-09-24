@@ -170,6 +170,10 @@ If a finding contradicts an assumption below, stop and flag it rather than worki
   far from the car — the owner got a nearby-closure notice for a closure next to where they stood,
   not where they parked. Safe-location and manual no-street parks have no segment
   (`saveUnmanagedParkedState`), so for those the saved point is all there is.
+  **Decided (owner, 2026-09-24):** a pin more than 50 m from the chosen curb contradicts the chosen
+  street. The parking flow asks before saving ("Pin is far from your street": drop it again / park
+  without a pin / keep both), and a kept far pin loses to the curb in closure matching, so closure
+  alerts always agree with the sweep and RPP reminders, which follow the street.
 
 ### Background sync (Tier 2)
 - Own WorkManager periodic worker, **independent** of the sweep/meter/RPP schedule (which stays at

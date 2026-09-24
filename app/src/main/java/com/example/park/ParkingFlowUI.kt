@@ -71,11 +71,39 @@ sealed class ParkingFlowState {
 
     data class DroppingPin(val carId: Long, val segment: StreetSegment, val originalPoint: LatLng) : ParkingFlowState()
 
+    // The pin (current location, or dropped by hand) is more than PIN_FAR_FROM_CURB_METERS from
+    // the street the user picked: two answers that contradict each other about where the car is.
+    // Asked once before saving. [offerMeterAfter]: the pin came from DroppingPin, whose meter-timer
+    // check still runs if the user keeps the pin.
+    data class PinFarFromStreet(
+        val carId: Long,
+        val segment: StreetSegment,
+        val point: LatLng,
+        val pin: LatLng,
+        val distanceMeters: Double,
+        val offerMeterAfter: Boolean
+    ) : ParkingFlowState()
+
     // Manual-picker escape hatch: instead of choosing from the distance-sorted list, the
     // user taps a street directly on the map. Reuses the existing segment tap-handling
     // infrastructure rather than GPS matching, so it works even with poor/no GPS.
     data class PickingViaMap(val carId: Long, val originPoint: LatLng) : ParkingFlowState()
 }
+
+/**
+ * A pin further than this from the chosen curb contradicts the chosen street. Generous enough for
+ * GPS error and a car parked at the far end of a long block; well short of "a different block".
+ */
+const val PIN_FAR_FROM_CURB_METERS = 50.0
+
+/** How far [pin] is from [segment]'s curb (the side-offset line the map highlights), in meters. */
+fun pinDistanceFromCurbMeters(segment: StreetSegment, pin: LatLng): Double =
+    if (segment.points.size < 2) 0.0
+    else distancePointToPolylineMeters(pin, offsetPolylineForSide(segment.points, segment.cnnRightLeft))
+
+/** "850 m" / "1.2 km", for the pin-far-from-street step. */
+fun formatDistanceMeters(meters: Double): String =
+    if (meters < 1000) "${(meters / 10).toInt() * 10} m" else "%.1f km".format(meters / 1000)
 
 /**
  * Holds the parking flow's current step AND the steps that led to it, so every step can offer

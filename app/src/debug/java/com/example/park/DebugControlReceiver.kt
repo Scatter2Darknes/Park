@@ -124,10 +124,13 @@ class DebugControlReceiver : BroadcastReceiver() {
         }
         val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
         // Same "where is the car" rule the closure matcher uses (closureMatchOrigin).
+        val pin = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng) else null
+        val curbSegment = segment?.takeIf { it.points.size >= 2 }
         val base = closureMatchOrigin(
-            exactPin = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng) else null,
-            curbMidpoint = segment?.takeIf { it.points.size >= 2 }?.let { midpointAlongPath(offsetPolylineForSide(it.points, it.cnnRightLeft)) },
-            parkedPoint = LatLng(parked.parkedLat, parked.parkedLng)
+            exactPin = pin,
+            curbMidpoint = curbSegment?.let { midpointAlongPath(offsetPolylineForSide(it.points, it.cnnRightLeft)) },
+            parkedPoint = LatLng(parked.parkedLat, parked.parkedLng),
+            pinToCurbMeters = if (pin != null && curbSegment != null) pinDistanceFromCurbMeters(curbSegment, pin) else null
         )
         val halfBlockLng = 50.0 / (111320.0 * Math.cos(Math.toRadians(base.lat))) // ~50 m east-west
         val points = when {

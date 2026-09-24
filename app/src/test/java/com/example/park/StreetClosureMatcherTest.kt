@@ -100,11 +100,30 @@ class StreetClosureMatcherTest {
         val pin = LatLng(37.7700, -122.4100)
         val curb = LatLng(37.7800, -122.4300)
         val phone = LatLng(37.7600, -122.4200) // where the parking flow started (the user's GPS)
-        assertEquals(pin, closureMatchOrigin(exactPin = pin, curbMidpoint = curb, parkedPoint = phone))
+        assertEquals(pin, closureMatchOrigin(exactPin = pin, curbMidpoint = curb, parkedPoint = phone, pinToCurbMeters = 10.0))
         // "Pick manually" + "just highlight street": the car is on the chosen curb, not at the phone.
         assertEquals(curb, closureMatchOrigin(exactPin = null, curbMidpoint = curb, parkedPoint = phone))
         // Garage / no-street park: no curb, so the saved point is all there is.
         assertEquals(phone, closureMatchOrigin(exactPin = null, curbMidpoint = null, parkedPoint = phone))
+    }
+
+    @Test
+    fun aPinFarFromTheChosenCurb_losesToTheCurb() {
+        // "Keep both" after the parking flow warned: reminders follow the street, so closures do too.
+        val farPin = LatLng(37.7700, -122.4100)
+        val curb = LatLng(37.7800, -122.4300)
+        assertEquals(curb, closureMatchOrigin(exactPin = farPin, curbMidpoint = curb, parkedPoint = farPin, pinToCurbMeters = 850.0))
+        // A pin near the curb is the better point, so it's used.
+        assertEquals(farPin, closureMatchOrigin(exactPin = farPin, curbMidpoint = curb, parkedPoint = farPin, pinToCurbMeters = 20.0))
+        // At exactly the limit it still counts as agreeing.
+        assertEquals(farPin, closureMatchOrigin(farPin, curb, farPin, pinToCurbMeters = PIN_FAR_FROM_CURB_METERS))
+    }
+
+    @Test
+    fun distanceFormatting_forThePinStep() {
+        assertEquals("850 m", formatDistanceMeters(853.0))
+        assertEquals("50 m", formatDistanceMeters(57.0))
+        assertEquals("1.2 km", formatDistanceMeters(1234.0))
     }
 
     @Test
