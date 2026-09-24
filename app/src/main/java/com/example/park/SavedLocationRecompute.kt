@@ -84,6 +84,26 @@ suspend fun reevaluateCarsFormerlySafeAt(context: Context, locationId: Long) {
 }
 
 /**
+ * Safe location [locationId]'s off-street flag was just switched (spec §3: "turning the flag on or off
+ * for a location with a car parked there re-runs that car's tow check"). Each car parked via it has its
+ * tow family cleared (alarms AND notifications: switched ON, a tow warning shown for a garage is
+ * wrong) and then re-armed, which finds no zones for an off-street location and the real ones again
+ * when switched off. Sweep, RPP and closure reminders are re-armed unchanged.
+ */
+suspend fun recheckTowForCarsAt(context: Context, locationId: Long) {
+    val affected = AppDatabase.getInstance(context).parkedStateDao().getForSafeLocation(locationId)
+    Log.d(TAG, "recheckTowForCarsAt: locationId=$locationId, ${affected.size} car(s) parked via it")
+    for (parked in affected) {
+        cancelTowReminder(context, parked.carId)
+        recomputeParkedSchedule(context, parked.carId, expectedParkedAtMillis = parked.parkedAtMillis)
+    }
+    if (affected.isNotEmpty()) {
+        BluetoothConnectionCenter.notifyParkedStateChanged()
+        enqueueWidgetRefresh(context)
+    }
+}
+
+/**
  * [location] just became safe — newly marked in LocationStyleDialog, or restored via "Undo"
  * after a delete. Converts any currently-managed parked car (a real segment, real sweep
  * reminder) sitting within SAFE_LOCATION_MATCH_RADIUS_METERS of it to unmanaged — this is a

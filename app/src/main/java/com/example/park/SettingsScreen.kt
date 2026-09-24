@@ -142,6 +142,8 @@ fun SettingsScreen(
     var closureAlertLeadHours by remember { mutableStateOf(SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS) }
     var closureLeadMenuExpanded by remember { mutableStateOf(false) }
     var closuresLastSyncMillis by remember { mutableStateOf<Long?>(null) }
+    var towLastSyncMillis by remember { mutableStateOf<Long?>(null) }
+    var towNewestEntryMillis by remember { mutableStateOf<Long?>(null) }
     var closureCheckRunning by remember { mutableStateOf(false) }
     var closureCheckMessage by remember { mutableStateOf<String?>(null) }
     var showClosuresLayer by remember { mutableStateOf(SettingsDefaults.SHOW_CLOSURES_LAYER) }
@@ -182,6 +184,8 @@ fun SettingsScreen(
         closureBackgroundSync = settings.closureBackgroundSync.first()
         closureAlertLeadHours = settings.closureAlertLeadHours.first()
         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
+        towLastSyncMillis = settings.towLastSyncMillis.first()
+        towNewestEntryMillis = settings.towNewestEntryMillis.first()
         showClosuresLayer = settings.showClosuresLayer.first()
     }
 
@@ -1220,19 +1224,21 @@ fun SettingsScreen(
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
-        SectionLabel("Street closures")
+        SectionLabel("Street closures and tow zones")
         DescriptionToggle(
-            "Temporary street closures permitted by SFMTA (events, construction, Shared Spaces). " +
-                    "Park downloads the whole city's list and matches it on your phone, so your " +
-                    "location is never sent anywhere. A closure is not a ticket risk: it can only " +
-                    "mean you may not be able to drive out for a while."
+            "Temporary street closures permitted by SFMTA (events, construction, Shared Spaces), " +
+                    "and temporary tow-away zones (moving vans, utility work). Park downloads the " +
+                    "whole city's lists and matches them on your phone, so your location is never " +
+                    "sent anywhere. A closure is not a ticket risk: it can only mean you may not be " +
+                    "able to drive out for a while. A tow zone is: your car gets reminders like a " +
+                    "sweep, plus a heads-up at the lead time below. Both switches below cover both."
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Check for closures when I park")
+                Text("Check for closures and tow zones when I park")
                 Text(
                     "Right after each park. Uses mobile data if that's what you're on.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1290,6 +1296,22 @@ fun SettingsScreen(
         Spacer(Modifier.height(4.dp))
         val closuresCheckedText = closuresLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
         Text("Closures last checked: $closuresCheckedText", style = MaterialTheme.typography.bodySmall)
+        val towCheckedText = towLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
+        Text("Tow zones last checked: $towCheckedText", style = MaterialTheme.typography.bodySmall)
+        // The city's tow feed stopped getting new permits in July 2026. Say so here too, not only in
+        // the banner, so "last checked: 2 hours ago" can't be read as "the data is current".
+        if (towLastSyncMillis != null && towFeedIsStale(towNewestEntryMillis, System.currentTimeMillis())) {
+            val newest = towNewestEntryMillis?.let {
+                java.time.Instant.ofEpochMilli(it).atZone(SF_ZONE).format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
+            }
+            Text(
+                "⚠ The city's tow-zone list looks out of date" +
+                        (newest?.let { ": its newest permit was entered $it" } ?: "") +
+                        ". New tow zones may be missing, so always check the signs.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
         if (closureParkTimeCheck || closureBackgroundSync) {
             Spacer(Modifier.height(8.dp))
             Button(
@@ -1297,19 +1319,26 @@ fun SettingsScreen(
                     closureCheckRunning = true
                     closureCheckMessage = null
                     scope.launch {
-                        closureCheckMessage = try {
-                            val count = StreetClosureRepository(context).refreshFromNetwork()
-                            refreshParkedSchedulesAfterSync(context)
-                            "Checked: $count upcoming closures citywide."
+                        val closureResult = try {
+                            "${StreetClosureRepository(context).refreshFromNetwork()} upcoming closures"
                         } catch (e: Exception) {
-                            "Couldn't check: ${e.message}"
+                            "closures failed (${e.message})"
                         }
+                        val towResult = try {
+                            "${TowZoneRepository(context).refreshFromNetwork()} tow zones"
+                        } catch (e: Exception) {
+                            "tow zones failed (${e.message})"
+                        }
+                        refreshParkedSchedulesAfterSync(context)
+                        closureCheckMessage = "Checked citywide: $closureResult, $towResult."
                         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
+                        towLastSyncMillis = settings.towLastSyncMillis.first()
+                        towNewestEntryMillis = settings.towNewestEntryMillis.first()
                         closureCheckRunning = false
                     }
                 },
                 enabled = !closureCheckRunning
-            ) { Text(if (closureCheckRunning) "Checking…" else "Check Closures Now") }
+            ) { Text(if (closureCheckRunning) "Checking…" else "Check Closures & Tow Zones Now") }
             closureCheckMessage?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall)

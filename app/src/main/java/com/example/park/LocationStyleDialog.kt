@@ -40,7 +40,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun LocationStyleDialog(
     location: SavedLocation,
-    onSave: (name: String, colorHex: String, iconEmoji: String, photoPath: String?, isSafeFromSweeping: Boolean) -> Unit,
+    onSave: (name: String, colorHex: String, iconEmoji: String, photoPath: String?, isSafeFromSweeping: Boolean, isOffStreet: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -53,6 +53,7 @@ fun LocationStyleDialog(
     // isSafeFromSweeping is nullable in the DB (null = "not marked safe" — see MIGRATION_15_16),
     // so == true is the correct null-safe read here.
     var isSafeFromSweeping by remember { mutableStateOf(location.isSafeFromSweeping == true) }
+    var isOffStreet by remember { mutableStateOf(location.isOffStreet == true) }
     var isProcessingPhoto by remember { mutableStateOf(false) }
     var cropSourceBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -156,11 +157,35 @@ fun LocationStyleDialog(
                     }
                     Switch(checked = isSafeFromSweeping, onCheckedChange = { isSafeFromSweeping = it })
                 }
+
+                // Only a safe-from-sweeping location is ever "parked at" (that's what records the
+                // location on the parked car — see saveUnmanagedParkedState), so off-street only means
+                // something together with it.
+                if (isSafeFromSweeping) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { isOffStreet = !isOffStreet }
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Off the street (garage or lot)", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Skips temporary tow-zone checks here. Leave off for a spot on the " +
+                                        "street: safe from sweeping isn't safe from a tow zone. Street " +
+                                        "closures are still checked, since one can block a garage exit.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = isOffStreet, onCheckedChange = { isOffStreet = it })
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath, isSafeFromSweeping) },
+                // Off-street is saved as false when the location isn't safe from sweeping (the switch was hidden).
+                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath, isSafeFromSweeping, isSafeFromSweeping && isOffStreet) },
                 enabled = editedName.isNotBlank()
             ) { Text("Save") }
         },

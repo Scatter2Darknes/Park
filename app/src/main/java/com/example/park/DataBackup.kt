@@ -42,6 +42,7 @@ suspend fun exportBackupJson(context: Context): String {
             put("lat", loc.lat)
             put("lng", loc.lng)
             put("isSafeFromSweeping", loc.isSafeFromSweeping == true)
+            put("isOffStreet", loc.isOffStreet == true)
         })
     }
 
@@ -133,7 +134,9 @@ suspend fun importBackupJson(context: Context, json: String): Result<Unit> = run
                     // optBoolean rather than getBoolean: a backup exported before this field
                     // existed simply won't have the key, and "not marked safe" is the right
                     // default for that case.
-                    isSafeFromSweeping = l.optBoolean("isSafeFromSweeping", false)
+                    isSafeFromSweeping = l.optBoolean("isSafeFromSweeping", false),
+                    // Same for older backups without the key: not off-street, so tow checks keep applying.
+                    isOffStreet = l.optBoolean("isOffStreet", false)
                 )
             )
         }

@@ -241,12 +241,13 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
     customizingLocation?.let { location ->
         LocationStyleDialog(
             location = location,
-            onSave = { name, colorHex, iconEmoji, photoPath, isSafeFromSweeping ->
+            onSave = { name, colorHex, iconEmoji, photoPath, isSafeFromSweeping, isOffStreet ->
                 scope.launch {
                     val wasSafe = location.isSafeFromSweeping == true
+                    val wasOffStreet = location.isOffStreet == true
                     val updated = location.copy(
                         name = name, colorHex = colorHex, iconEmoji = iconEmoji, photoPath = photoPath,
-                        isSafeFromSweeping = isSafeFromSweeping
+                        isSafeFromSweeping = isSafeFromSweeping, isOffStreet = isOffStreet
                     )
                     AppDatabase.getInstance(context).savedLocationDao().update(updated)
                     // The location's lat/lng never change in this dialog, so a recompute is
@@ -256,6 +257,11 @@ fun SavedLocationsScreen(onBack: () -> Unit, onPickFromMap: (name: String) -> Un
                     when {
                         wasSafe && !isSafeFromSweeping -> reevaluateCarsFormerlySafeAt(context, location.id)
                         !wasSafe && isSafeFromSweeping -> convertCarsNowSafeAt(context, updated)
+                    }
+                    // Only a still-safe location keeps cars parked "at" it; the branches above already
+                    // re-armed everything when the safe flag itself flipped.
+                    if (wasSafe && isSafeFromSweeping && wasOffStreet != isOffStreet) {
+                        recheckTowForCarsAt(context, location.id)
                     }
                     customizingLocation = null
                     reload()
