@@ -55,6 +55,29 @@ class ClosureMapLayerTest {
     }
 
     @Test
+    fun theCutOff_isTheEndOfTheLabelledDay_notSevenDaysFromNow() {
+        // Now: Wed Sep 23, 9 AM. The label says "through Sep 30", so ALL of Sep 30 is covered.
+        val sep30At8pm = ZonedDateTime.of(2026, 9, 30, 20, 0, 0, 0, SF_ZONE).toInstant().toEpochMilli()
+        val oct1At0030 = ZonedDateTime.of(2026, 10, 1, 0, 30, 0, 0, SF_ZONE).toInstant().toEpochMilli()
+        val blocks = groupClosuresForMap(
+            listOf(closure("sep30evening", cnn = "1", startIn = sep30At8pm - now), closure("oct1", cnn = "2", startIn = oct1At0030 - now)),
+            carClosures = emptyList(), nowMillis = now
+        )
+        assertEquals(listOf("1"), blocks.map { it.cnn }) // the evening of the labelled day is in; the next day isn't
+        assertEquals(ZonedDateTime.of(2026, 10, 1, 0, 0, 0, 0, SF_ZONE).toInstant().toEpochMilli(), closureMapHorizonEndMillis(now))
+    }
+
+    @Test
+    fun theLabel_andCutOff_followSanFranciscoDates() {
+        // 11:30 PM Sep 23 in SF is already Sep 24 in UTC; the label must still follow SF's calendar.
+        val lateEvening = ZonedDateTime.of(2026, 9, 23, 23, 30, 0, 0, SF_ZONE).toInstant().toEpochMilli()
+        assertEquals("Closures through Sep 30", closureHorizonLabel(lateEvening))
+        // Just after SF midnight, a new day: the window moves on by one.
+        val justAfterMidnight = ZonedDateTime.of(2026, 9, 24, 0, 5, 0, 0, SF_ZONE).toInstant().toEpochMilli()
+        assertEquals("Closures through Oct 1", closureHorizonLabel(justAfterMidnight))
+    }
+
+    @Test
     fun theParkedCarsClosure_isAlwaysDrawnAndFlagged_evenWithTheLayerOff() {
         val mine = closure("mine", cnn = "9", startIn = 3 * day)
         val blocks = groupClosuresForMap(layerClosures = emptyList(), carClosures = listOf(mine), nowMillis = now)

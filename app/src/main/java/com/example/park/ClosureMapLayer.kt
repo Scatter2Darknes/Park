@@ -9,15 +9,29 @@ import java.time.format.DateTimeFormatter
  * What the map shows about street closures (docs/park-closures-spec.md §4 "Map layer").
  *
  * Two sources, merged per block:
- *  - The citywide layer: every closure in view that is on now or starts within
- *    CLOSURE_MAP_HORIZON_MILLIS. Only with Tier 2 background sync on AND the layer's own switch on.
+ *  - The citywide layer: every closure in view that is on now or starts before the end of the day
+ *    CLOSURE_MAP_HORIZON_DAYS from today (closureMapHorizonEndMillis). Only with Tier 2 background
+ *    sync on AND the layer's own switch on.
  *  - The parked car's own closures (the ones behind its banner line), drawn whenever closures are
  *    enabled at all, even Tier 1: they come from the same data the banner already shows.
  * The drawing itself (osmdroid overlays) is in MapUtils.kt: drawClosureOverlays.
  */
 
-/** How far ahead the closures layer looks. One constant (spec: tune from first-seen data). */
-const val CLOSURE_MAP_HORIZON_MILLIS = CLOSURE_BANNER_HORIZON_MILLIS
+/** How far ahead the closures layer looks, in whole days. One constant (spec: tune from first-seen data). */
+const val CLOSURE_MAP_HORIZON_DAYS = 7L
+
+/** Roughly the same span in ms, for the parked car's own closures (see carClosuresForMap). */
+const val CLOSURE_MAP_HORIZON_MILLIS = CLOSURE_MAP_HORIZON_DAYS * 24 * 60 * 60_000L
+
+/**
+ * The layer's cut-off: the END of the day [CLOSURE_MAP_HORIZON_DAYS] days from today, San Francisco
+ * time (midnight starting the day after), so the label's date is covered in full. A plain "now + 7
+ * days" cut-off would stop partway through the labelled day and leave its later closures off a map
+ * that says it shows them. Always SF time, whatever the phone's time zone: these are SF events.
+ */
+fun closureMapHorizonEndMillis(nowMillis: Long): Long =
+    Instant.ofEpochMilli(nowMillis).atZone(SF_ZONE).toLocalDate()
+        .plusDays(CLOSURE_MAP_HORIZON_DAYS + 1).atStartOfDay(SF_ZONE).toInstant().toEpochMilli()
 
 /**
  * One block's closures, drawn as a single line with a single badge. A recurring closure arrives as
@@ -52,10 +66,10 @@ fun groupClosuresForMap(
     layerClosures: List<StreetClosure>,
     carClosures: List<StreetClosure>,
     nowMillis: Long,
-    horizonMillis: Long = CLOSURE_MAP_HORIZON_MILLIS
+    horizonEndMillis: Long = closureMapHorizonEndMillis(nowMillis)
 ): List<ClosureBlock> {
     val carIds = carClosures.map { it.objectId }.toSet()
-    val inHorizon = layerClosures.filter { it.endMillis > nowMillis && it.startMillis <= nowMillis + horizonMillis }
+    val inHorizon = layerClosures.filter { it.endMillis > nowMillis && it.startMillis < horizonEndMillis }
     return (inHorizon + carClosures)
         .distinctBy { it.objectId }
         .groupBy { it.cnn }
@@ -68,9 +82,12 @@ fun groupClosuresForMap(
 
 private val HORIZON_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
 
-/** The layer's label, so an empty map reads as "none this week", not "none ever": "Closures through Sep 30". */
-fun closureHorizonLabel(nowMillis: Long, horizonMillis: Long = CLOSURE_MAP_HORIZON_MILLIS): String =
-    "Closures through " + Instant.ofEpochMilli(nowMillis + horizonMillis).atZone(SF_ZONE).format(HORIZON_DATE)
+/**
+ * The layer's label, so an empty map reads as "none this week", not "none ever": "Closures through
+ * Sep 30" — the last day the cut-off (closureMapHorizonEndMillis) covers in full.
+ */
+fun closureHorizonLabel(nowMillis: Long): String =
+    "Closures through " + Instant.ofEpochMilli(closureMapHorizonEndMillis(nowMillis) - 1).atZone(SF_ZONE).format(HORIZON_DATE)
 
 /** The badge on a closed block: "🚧 now" while it's on, else time until it starts ("🚧 2d"). */
 fun closureBadgeText(block: ClosureBlock, nowMillis: Long): String =
