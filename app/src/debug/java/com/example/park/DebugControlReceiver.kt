@@ -122,9 +122,13 @@ class DebugControlReceiver : BroadcastReceiver() {
             Log.w(TAG, "INJECT_CLOSURE rejected: need a PARKED carId (got $carId), kind blocked|nearby (got $kind), durationMinutes > 0")
             return
         }
-        val base = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng)
-        else LatLng(parked.parkedLat, parked.parkedLng)
         val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
+        // Same "where is the car" rule the closure matcher uses (closureMatchOrigin).
+        val base = closureMatchOrigin(
+            exactPin = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng) else null,
+            curbMidpoint = segment?.takeIf { it.points.size >= 2 }?.let { midpointAlongPath(offsetPolylineForSide(it.points, it.cnnRightLeft)) },
+            parkedPoint = LatLng(parked.parkedLat, parked.parkedLng)
+        )
         val halfBlockLng = 50.0 / (111320.0 * Math.cos(Math.toRadians(base.lat))) // ~50 m east-west
         val points = when {
             kind == "nearby" -> {

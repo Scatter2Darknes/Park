@@ -238,14 +238,10 @@ fun closureAlertContent(carName: String, closure: StreetClosure, atSavedLocation
 
 // --- Android side ---
 
-/** Where to match closures from: the exact pin when there is one, else the parked GPS point. */
-private fun ParkedState.closureMatchPoint(): LatLng =
-    if (exactPinLat != null && exactPinLng != null) LatLng(exactPinLat, exactPinLng) else LatLng(parkedLat, parkedLng)
-
 /** The banner status for one parked car, from stored data only (no network). */
 suspend fun resolveClosureStatus(context: Context, parked: ParkedState, lastSyncMillis: Long?, leadMillis: Long): ClosureStatus {
     val now = System.currentTimeMillis()
-    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val hits = findClosuresForParkedCar(context, parked, now)
     return closureStatusFor(hits, closureDataIsUsable(lastSyncMillis, now), now, leadMillis)
 }
 
@@ -254,7 +250,7 @@ suspend fun closureOfferSummaryFor(context: Context, carId: Long): String {
     val parked = AppDatabase.getInstance(context).parkedStateDao().getForCar(carId)
         ?: return closureOfferSummary(emptyList(), dataUsable = false, nowMillis = System.currentTimeMillis())
     val now = System.currentTimeMillis()
-    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val hits = findClosuresForParkedCar(context, parked, now)
     val usable = closureDataIsUsable(SettingsRepository(context).closuresLastSyncMillis.first(), now)
     return closureOfferSummary(hits, usable, now)
 }
@@ -296,7 +292,7 @@ internal suspend fun armClosureAlert(context: Context, parked: ParkedState, carN
         return
     }
     val now = System.currentTimeMillis()
-    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val hits = findClosuresForParkedCar(context, parked, now)
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     when (val plan = planClosureAlert(hits, parked.closureDeliveredForMillis, now, leadMillis)) {
         ClosureAlertPlan.None -> alarmManager.cancel(closureAlertPendingIntent(context, parked.carId, null))
@@ -452,7 +448,7 @@ private suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, par
     val parked = db.parkedStateDao().getForCar(carId)?.takeIf { it.parkedAtMillis == parkedAtMillis } ?: return // re-parked meanwhile
     val carName = db.carDao().getAll().firstOrNull { it.id == carId }?.name ?: "Your car"
     val now = System.currentTimeMillis()
-    val hits = findClosuresForParkedCar(context, parked.closureMatchPoint(), parked.segmentBlockSweepId, now)
+    val hits = findClosuresForParkedCar(context, parked, now)
     val nearby = pickNearbyToNotifyOnPark(hits, now, closureLeadMillis(context)) ?: return
     val (title, text) = closureNearbyContent(carName, nearby.closure, now)
     postClosureNotification(context, carId, NotificationIds.Purpose.CLOSURE_NEARBY, title, text)

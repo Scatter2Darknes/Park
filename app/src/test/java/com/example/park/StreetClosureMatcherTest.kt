@@ -93,6 +93,29 @@ class StreetClosureMatcherTest {
         assertEquals(167.0, hit.distanceMeters, 3.0)
     }
 
+    // --- Where the car is ---
+
+    @Test
+    fun matchOrigin_prefersThePin_thenTheChosenCurb_neverThePhonesStartingPoint() {
+        val pin = LatLng(37.7700, -122.4100)
+        val curb = LatLng(37.7800, -122.4300)
+        val phone = LatLng(37.7600, -122.4200) // where the parking flow started (the user's GPS)
+        assertEquals(pin, closureMatchOrigin(exactPin = pin, curbMidpoint = curb, parkedPoint = phone))
+        // "Pick manually" + "just highlight street": the car is on the chosen curb, not at the phone.
+        assertEquals(curb, closureMatchOrigin(exactPin = null, curbMidpoint = curb, parkedPoint = phone))
+        // Garage / no-street park: no curb, so the saved point is all there is.
+        assertEquals(phone, closureMatchOrigin(exactPin = null, curbMidpoint = null, parkedPoint = phone))
+    }
+
+    @Test
+    fun aClosureNextToThePhone_isNotNearby_whenTheCarIsOnAFarCurb() {
+        // The reported bug: user stands next to a closure, parks the car ~1 km away via "pick manually".
+        val phone = LatLng(37.76010, -122.41945) // ~11 m from the closure
+        val farCurb = LatLng(37.7690, -122.4195)  // ~1 km north
+        val origin = closureMatchOrigin(exactPin = null, curbMidpoint = farCurb, parkedPoint = phone)
+        assertNull(classifyClosure(closure(cnn = "200"), parkedCnn = "300", point = origin))
+    }
+
     // --- Ranking ---
 
     @Test

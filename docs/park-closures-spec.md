@@ -163,9 +163,13 @@ If a finding contradicts an assumption below, stop and flag it rather than worki
   from the UI's coroutine scope.
 - **Ignores the Wi-Fi-only setting.** You're at the curb on cellular; that's the point of the check.
   Wi-Fi-only applies to the Tier 2 background worker only.
-- Match from the parked **lat/lng** (`parkedLat/Lng`, or the exact pin when set), not only the
-  segment. Safe-location and manual no-street parks are saved without a segment
-  (`saveUnmanagedParkedState`).
+- **(corrected again, 2026-09-24)** Match from where the CAR is (`closureMatchOrigin`): the exact
+  pin when set; otherwise the middle of the chosen curb (as RPP does in `saveParkedState`);
+  otherwise `parkedLat/Lng`. `parkedLat/Lng` alone is wrong for a curb park: it's the point the
+  parking flow started from (the phone's GPS), which after "pick manually / select from map" can be
+  far from the car — the owner got a nearby-closure notice for a closure next to where they stood,
+  not where they parked. Safe-location and manual no-street parks have no segment
+  (`saveUnmanagedParkedState`), so for those the saved point is all there is.
 
 ### Background sync (Tier 2)
 - Own WorkManager periodic worker, **independent** of the sweep/meter/RPP schedule (which stays at

@@ -126,9 +126,7 @@ suspend fun loadClosureBlocksForMap(context: Context, center: LatLng, radiusDegr
         db.streetClosureDao().getNearby(now, center.lat - box, center.lat + box, center.lng - box, center.lng + box)
     } else emptyList()
     val carClosures = db.parkedStateDao().getAll().flatMap { parked ->
-        val point = if (parked.exactPinLat != null && parked.exactPinLng != null) LatLng(parked.exactPinLat, parked.exactPinLng)
-        else LatLng(parked.parkedLat, parked.parkedLng)
-        carClosuresForMap(findClosuresForParkedCar(context, point, parked.segmentBlockSweepId, now), now, lead)
+        carClosuresForMap(findClosuresForParkedCar(context, parked, now), now, lead)
     }
     return groupClosuresForMap(layer, carClosures, now)
 }
