@@ -40,6 +40,7 @@ Your cars, saved locations and settings should all still be there. This one chec
 
 ## Small things to sort out
 - Re-run the T0 query in a browser: `https://data.sf.gov/resource/yhqp-riqs.json?$select=holidays,fromhour,tohour,count(*)&$group=holidays,fromhour,tohour`, and check SFMTA's holiday page for whether nightly sweeping is also off on Thanksgiving Day. Both were read through a summarizing tool.
+  - **Holiday page re-checked 2026-09-24** (https://www.sfmta.com/getting-around/drive-park/holiday-enforcement-schedule, asked for verbatim wording): nightly street sweeping (12am–6am) is "Not Enforced" on New Year's Day, Thanksgiving Day and Christmas Day and "Enforced" on every other listed holiday, including the Day After Thanksgiving; weekday daytime sweeping (6am–2pm) is not enforced on any listed holiday. That matches `SfHolidayCalendar` (`majorHolidaysOnly` / `fullSuspensionHolidays`) exactly. The T0 query itself was already re-run on raw data in F1.
 - The F2 commit (`4d4ad91`) accidentally includes an empty `docs/Followup-Plan.md`; the real content is still an uncommitted change. Ask to have it removed if you want it gone.
 
 ## Warnings

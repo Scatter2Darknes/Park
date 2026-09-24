@@ -1660,13 +1660,8 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
 
         SectionLabel("Test Bluetooth Hooks")
-        if (!bluetoothAutoDetectEnabled) {
-            Text(
-                "Bluetooth auto-detect is turned off above \u2014 enable it to test these hooks.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
+        // Always shown (greyed out while auto-detect is off), like the other dependent options.
+        DependentSetting(enabled = bluetoothAutoDetectEnabled, needs = "Bluetooth auto-detect on (above)") {
             DescriptionToggle(
                 "Runs the same logic a real Bluetooth disconnect/reconnect would trigger, " +
                         "without needing to actually disconnect anything \u2014 useful for telling " +
@@ -1684,13 +1679,13 @@ fun SettingsScreen(
                 bluetoothLinkedCars.forEach { car ->
                     Text(car.name, style = MaterialTheme.typography.labelMedium)
                     Row {
-                        TextButton(onClick = {
+                        TextButton(enabled = bluetoothAutoDetectEnabled, onClick = {
                             scope.launch {
                                 simulateBluetoothDisconnect(context, car)
                                 testBluetoothStatus = "Simulated disconnect for ${car.name} \u2014 check for a notification, and the map's pill/banner if it's open."
                             }
                         }) { Text("Simulate Disconnect (Park)") }
-                        TextButton(onClick = {
+                        TextButton(enabled = bluetoothAutoDetectEnabled, onClick = {
                             scope.launch {
                                 simulateBluetoothReconnect(context, car)
                                 testBluetoothStatus = "Simulated reconnect for ${car.name} \u2014 check for a notification, and the map's pill/banner if it's open."
