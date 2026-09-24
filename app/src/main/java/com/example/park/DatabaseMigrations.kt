@@ -255,10 +255,19 @@ val MIGRATION_19_20 = Migration(19, 20) { db ->
     db.execSQL("CREATE INDEX IF NOT EXISTS index_street_closure_endMillis ON street_closure (endMillis)")
 }
 
+/**
+ * v20 -> v21: adds closureDeliveredForMillis to parked_state — the delivery marker for street-closure
+ * "blocked in" alerts (see ClosureAlerts.kt). Nullable INTEGER with no default, same as every other
+ * additive column here: null = no closure alert delivered for this row yet.
+ */
+val MIGRATION_20_21 = Migration(20, 21) { db ->
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN closureDeliveredForMillis INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20
+    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21
 )
 
 /*

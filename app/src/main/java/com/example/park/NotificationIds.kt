@@ -56,7 +56,10 @@ object NotificationIds {
         SAVED_LOCATION_RECOMPUTE(9 * SPAN),
         /** Manual meter timer — a single user-typed deadline, no tiers, no delivery markers
          *  (see MeterTimer.kt). */
-        METER_TIMER(10 * SPAN)
+        METER_TIMER(10 * SPAN),
+        /** Street-closure "blocked in" alert: its alarm's request code and its notification id
+         *  (see ClosureAlerts.kt). One slot per car; alerts go out one closure at a time. */
+        CLOSURE_ALERT(11 * SPAN)
     }
 
     /**

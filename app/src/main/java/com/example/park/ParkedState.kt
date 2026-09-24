@@ -43,7 +43,11 @@ data class ParkedState(
     // if none is set. Persisted here (not just as a bare AlarmManager alarm) so the map's
     // priority banner and the widget can show it alongside the sweep/RPP deadline — see
     // soonestDeadline() in CarActions.kt.
-    val meterTimerAtMillis: Long? = null
+    val meterTimerAtMillis: Long? = null,
+    // The START time of the latest street closure whose "blocked in" alert was delivered for this
+    // row (see ClosureAlerts.kt), or null if none. Closure alerts go out in start order, so only a
+    // closure starting AFTER this one is still due. Resets with the row, like the markers above.
+    val closureDeliveredForMillis: Long? = null
 ) {
     /** The deadline [kind]'s reminder was last delivered for, or null if it never was. */
     fun deliveredForMillis(kind: ReminderKind): Long? = when (kind) {
@@ -106,4 +110,7 @@ interface ParkedStateDao {
 
     @Query("UPDATE parked_state SET rppUrgentDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun markRppUrgentDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
+
+    @Query("UPDATE parked_state SET closureDeliveredForMillis = :closureStartMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun markClosureDelivered(carId: Long, parkedAtMillis: Long, closureStartMillis: Long)
 }

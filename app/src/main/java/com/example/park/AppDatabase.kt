@@ -10,7 +10,7 @@ import java.time.ZoneId
 
 @Database(
     entities = [StreetSegment::class, Car::class, ParkedState::class, SavedLocation::class, ScheduleOverride::class, RppZoneRegulation::class, MeteredZone::class, StreetClosure::class],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(LatLngListConverter::class)
@@ -71,6 +71,9 @@ suspend fun saveParkedState(
     // about to set a NEW meter timer for this fresh row (see finishWithMeterTimer in
     // MapScreen.kt) does so afterward, so this can't clobber it.
     cancelMeterTimer(context, carId)
+    // The previous spot's closure alert (alarm + notification). The new spot's is armed by the
+    // park-time check started at the end of this function.
+    cancelClosureAlert(context, carId)
     // The whole CURB's schedule, not just the matched row's: a curb is often described by several rows (one per
     // sweep weekday / week pattern), and parking on one must cover them all — see CurbSchedule.
     val curbRows = loadCurbRows(context, segment)
@@ -175,6 +178,8 @@ suspend fun saveParkedState(
     db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, sweepHandled || rppHandled)
 
     enqueueWidgetRefresh(context)
+    // Runs in the background AFTER the save: never delays it (spec §3, park-time fetch).
+    ClosureCheckCenter.start(context, carId, parkedAtMillis)
 }
 
 /**
@@ -256,6 +261,7 @@ suspend fun saveUnmanagedParkedState(
     // See saveParkedState's identical call for why this is unconditional and safe to run
     // before a caller sets a fresh meter timer for this same row.
     cancelMeterTimer(context, carId)
+    cancelClosureAlert(context, carId) // as in saveParkedState
 
     val rppRegulation = findConfidentRppMatch(context, point)
     android.util.Log.d(
@@ -296,4 +302,6 @@ suspend fun saveUnmanagedParkedState(
 
     db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, rppHandled)
     enqueueWidgetRefresh(context)
+    // Closures still matter here: a closed street can block a garage exit (spec §4).
+    ClosureCheckCenter.start(context, carId, parkedAtMillis)
 }

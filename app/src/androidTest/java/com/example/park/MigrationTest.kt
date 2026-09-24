@@ -203,6 +203,32 @@ class MigrationTest {
         )
     }
 
+    @Test
+    fun migrate20To21_keepsParkedRow_andAddsNullClosureMarker() {
+        helper.createDatabase(TEST_DB, 20).apply {
+            execSQL(
+                """
+                INSERT INTO parked_state
+                    (id, carId, segmentBlockSweepId, sideConfirmed, parkedLat, parkedLng,
+                     parkedAtMillis, nextSweepAtMillis, notificationScheduled, normalDeliveredForMillis)
+                VALUES
+                    (1, 42, 'block-123', 1, 37.7749, -122.4194, 1000000, 2000000, 1, 2000000)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 21, true, MIGRATION_20_21)
+
+        db.query("SELECT carId, normalDeliveredForMillis, closureDeliveredForMillis FROM parked_state").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(42L, c.getLong(0))
+            assertEquals(2000000L, c.getLong(1))
+            assertTrue("closureDeliveredForMillis should be NULL after migration", c.isNull(2))
+            assertEquals(1, c.count)
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }
