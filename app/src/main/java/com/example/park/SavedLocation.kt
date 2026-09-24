@@ -27,6 +27,38 @@ data class SavedLocation(
 }
 
 /**
+ * What kind of spot a saved location is, as ONE choice in LocationStyleDialog. The two stored flags
+ * (isSafeFromSweeping, isOffStreet) only ever make three meaningful combinations — "off the street but
+ * swept" can't happen — so the dialog offers these three instead of a switch that reveals a second one.
+ * An enum class is a fixed set of named values; each one here also knows what it means for the flags.
+ */
+enum class SpotKind(val title: String, val description: String) {
+    ON_STREET(
+        "On the street",
+        "All checks: street cleaning, permit (RPP) limit, tow zones and closures."
+    ),
+    NEVER_SWEPT(
+        "On the street, never swept",
+        "Skips street cleaning. Still checks the permit (RPP) limit, tow zones and closures."
+    ),
+    OFF_STREET(
+        "Off the street",
+        "A garage, driveway or lot. Only checks street closures, since one can block your exit."
+    );
+
+    val isSafeFromSweeping: Boolean get() = this != ON_STREET
+    val isOffStreet: Boolean get() = this == OFF_STREET
+}
+
+/** The location's current [SpotKind]. Off-street wins: off the street is never swept either. */
+val SavedLocation.spotKind: SpotKind
+    get() = when {
+        isOffStreet == true -> SpotKind.OFF_STREET
+        isSafeFromSweeping == true -> SpotKind.NEVER_SWEPT
+        else -> SpotKind.ON_STREET
+    }
+
+/**
  * Whether [parked] is at a saved location marked off the street. Checked at USE time (arming, the
  * banner) rather than baked into the parked row, so switching the flag on or off applies to a car
  * already parked there without re-saving it — a re-save would restart its RPP clock.

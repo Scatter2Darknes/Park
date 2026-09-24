@@ -10,12 +10,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -50,10 +53,9 @@ fun LocationStyleDialog(
     var selectedColor by remember { mutableStateOf(location.colorHex ?: DEFAULT_LOCATION_COLOR_HEX) }
     var selectedIcon by remember { mutableStateOf(location.iconEmoji ?: DEFAULT_LOCATION_ICON) }
     var pendingPhotoPath by remember { mutableStateOf(location.photoPath) }
-    // isSafeFromSweeping is nullable in the DB (null = "not marked safe" — see MIGRATION_15_16),
-    // so == true is the correct null-safe read here.
-    var isSafeFromSweeping by remember { mutableStateOf(location.isSafeFromSweeping == true) }
-    var isOffStreet by remember { mutableStateOf(location.isOffStreet == true) }
+    // Both flags as one choice (see SpotKind): all three options are always visible, instead of an
+    // "off the street" switch that only appeared after turning "safe from street cleaning" on.
+    var spotKind by remember { mutableStateOf(location.spotKind) }
     var isProcessingPhoto by remember { mutableStateOf(false) }
     var cropSourceBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
@@ -82,6 +84,41 @@ fun LocationStyleDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(16.dp))
+
+                // First after the name: it decides which reminders a car parked here gets, so it must be
+                // seen without scrolling (the dialog is height-capped and scrolls).
+                Text("What kind of spot is this?", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    "Applies when you park here, manually or via Bluetooth auto-park.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                // selectableGroup + selectable(role = RadioButton) make screen readers announce this as
+                // one group of three options, "1 of 3, selected", like a native radio list.
+                Column(Modifier.selectableGroup()) {
+                    SpotKind.entries.forEach { kind ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(selected = spotKind == kind, role = Role.RadioButton, onClick = { spotKind = kind })
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(selected = spotKind == kind, onClick = null) // the whole row handles the tap
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(kind.title, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    kind.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
 
                 LocationPreviewSwatch(colorHex = selectedColor, icon = selectedIcon, photoPath = pendingPhotoPath)
@@ -140,53 +177,11 @@ fun LocationStyleDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable { isSafeFromSweeping = !isSafeFromSweeping }
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Safe from street cleaning", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "e.g. a garage or driveway. Parking here — manually, or via " +
-                                    "Bluetooth auto-park — skips street-sweeping matching entirely.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(checked = isSafeFromSweeping, onCheckedChange = { isSafeFromSweeping = it })
-                }
-
-                // Only a safe-from-sweeping location is ever "parked at" (that's what records the
-                // location on the parked car — see saveUnmanagedParkedState), so off-street only means
-                // something together with it.
-                if (isSafeFromSweeping) {
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { isOffStreet = !isOffStreet }
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Off the street (garage or lot)", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "Skips temporary tow-zone checks and the permit (RPP) time limit " +
-                                        "here. Leave off for a spot on the street: safe from sweeping " +
-                                        "isn't safe from a tow zone or a 2-hour limit. Street closures " +
-                                        "are still checked, since one can block a garage exit.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(checked = isOffStreet, onCheckedChange = { isOffStreet = it })
-                    }
-                }
             }
         },
         confirmButton = {
             TextButton(
-                // Off-street is saved as false when the location isn't safe from sweeping (the switch was hidden).
-                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath, isSafeFromSweeping, isSafeFromSweeping && isOffStreet) },
+                onClick = { onSave(editedName.trim(), selectedColor, selectedIcon, pendingPhotoPath, spotKind.isSafeFromSweeping, spotKind.isOffStreet) },
                 enabled = editedName.isNotBlank()
             ) { Text("Save") }
         },
