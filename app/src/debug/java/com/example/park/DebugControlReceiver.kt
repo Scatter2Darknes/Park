@@ -133,7 +133,19 @@ class DebugControlReceiver : BroadcastReceiver() {
             pinToCurbMeters = if (pin != null && curbSegment != null) pinDistanceFromCurbMeters(curbSegment, pin) else null
         )
         val halfBlockLng = 50.0 / (111320.0 * Math.cos(Math.toRadians(base.lat))) // ~50 m east-west
+        // "nearby": a REAL street 60–190 m from the car's curb (inside the nearby radius, not its
+        // block), so the fake closure is drawn where a real one could be. Only if none is in range, a
+        // straight line ~120 m north (which can land between streets, e.g. in back yards).
+        val nearbyStreet = if (kind == "nearby") {
+            val box = 0.003
+            db.streetSegmentDao().getNearby(base.lat - box, base.lat + box, base.lng - box, base.lng + box)
+                .filter { it.points.size >= 2 && it.cnn != segment?.cnn }
+                .map { it to distancePointToPolylineMeters(base, it.points) }
+                .filter { (_, d) -> d in 60.0..190.0 }
+                .minByOrNull { (_, d) -> d }?.first
+        } else null
         val points = when {
+            nearbyStreet != null -> nearbyStreet.points
             kind == "nearby" -> {
                 val north = base.lat + 120.0 / 111320.0 // ~120 m north: inside the nearby radius, not on the block
                 listOf(LatLng(north, base.lng - halfBlockLng), LatLng(north, base.lng + halfBlockLng))
@@ -145,8 +157,13 @@ class DebugControlReceiver : BroadcastReceiver() {
         val start = now + startInMinutes * 60_000L
         val closure = StreetClosure(
             objectId = "debug-$now", caseNum = null, caseName = "Debug closure", type = "Special Event",
-            cnn = if (kind == "blocked") segment?.cnn ?: "debug-block" else "debug-nearby",
-            street = segment?.corridor ?: "DEBUG ST", fromStreet = null, toStreet = null,
+            cnn = when {
+                kind == "blocked" -> segment?.cnn ?: "debug-block"
+                nearbyStreet != null -> nearbyStreet.cnn
+                else -> "debug-nearby"
+            },
+            street = (if (kind == "nearby") nearbyStreet?.corridor else segment?.corridor) ?: "DEBUG ST",
+            fromStreet = null, toStreet = null,
             vehicleImpact = "all-lanes-closed", startMillis = start, endMillis = start + durationMinutes * 60_000L,
             points = points, centroidLat = points.map { it.lat }.average(), centroidLng = points.map { it.lng }.average()
         )
@@ -154,7 +171,7 @@ class DebugControlReceiver : BroadcastReceiver() {
         recomputeParkedSchedule(context, carId)
         BluetoothConnectionCenter.notifyParkedStateChanged()
         val status = resolveClosureStatus(context, parked, SettingsRepository(context).closuresLastSyncMillis.first(), closureLeadMillis(context))
-        Log.i(TAG, "INJECT_CLOSURE: ${closure.objectId} kind=$kind start=${fmt(start)} end=${fmt(closure.endMillis)} " +
+        Log.i(TAG, "INJECT_CLOSURE: ${closure.objectId} kind=$kind street='${closure.street}' start=${fmt(start)} end=${fmt(closure.endMillis)} " +
                 "-> banner: ${closureBannerText(status, System.currentTimeMillis())}")
     }
 
