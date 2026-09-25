@@ -485,6 +485,49 @@ class ArmingCharacterizationTest {
         assertEquals(expect(parkedLine(null), status(null, "null", null, "null", null)), snapshot())
     }
 
+    // --- stale or missing data: the banner must never read "clear" -----------------------------------
+
+    @Test
+    fun rearm_oldClosureAndTowData_bannerSaysUnchecked_neverClear() = runBlocking {
+        val seg = s1()
+        val d = sweepDeadline(seg)
+        db.streetSegmentDao().insertAll(listOf(seg))
+        db.parkedStateDao().upsert(parked("S1", s1Points[0], d))
+        val settings = SettingsRepository(context)
+        settings.setClosuresLastSyncMillis(now - 4 * DAY) // older than the 3-day limit
+        settings.setTowLastSyncMillis(now - 4 * DAY)
+
+        rearmAllActiveReminders(context)
+
+        assertEquals(expect(
+            tiers(ReminderKind.NORMAL, ReminderKind.URGENT, RollForwardKind.SWEEP, d, corridor),
+            parkedLine(d),
+            status(null, "Unchecked", null, "Unchecked", "SWEEP@$d")
+        ), snapshot())
+    }
+
+    @Test
+    fun rearm_towFeedStale_stillArmsTheKnownZone_bannerSaysStale() = runBlocking {
+        val seg = s1()
+        val d = sweepDeadline(seg)
+        db.streetSegmentDao().insertAll(listOf(seg))
+        val zone = tow("T1", "100").copy(startEpochDay = today.plusDays(3).toEpochDay(), endEpochDay = today.plusDays(4).toEpochDay())
+        db.towZoneDao().insertAll(listOf(zone))
+        db.parkedStateDao().upsert(parked("S1", s1Points[0], d))
+        SettingsRepository(context).setTowNewestEntryMillis(now - 60 * DAY) // synced today, but the feed stopped
+        val t = nextTowDeadline(listOf(zone), sfNow())!!.startMillis // in 3 days: advance alert scheduled, not fired
+
+        rearmAllActiveReminders(context)
+
+        assertEquals(expect(
+            tiers(ReminderKind.NORMAL, ReminderKind.URGENT, RollForwardKind.SWEEP, d, corridor),
+            tiers(ReminderKind.TOW_NORMAL, ReminderKind.TOW_URGENT, RollForwardKind.TOW, t, corridor),
+            reminderAlarm(ReminderKind.TOW_ADVANCE, t - 48 * HOUR, t, corridor),
+            parkedLine(d),
+            status(null, "Clear", t, "Stale", if (t < d) "TOW@$t" else "SWEEP@$d")
+        ), snapshot())
+    }
+
     // --- fresh park (the save path is a known leftover this pass, but it is covered) ----------------
 
     @Test
