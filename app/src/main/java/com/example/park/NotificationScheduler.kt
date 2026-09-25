@@ -356,60 +356,39 @@ internal suspend fun scheduleTiers(
 }
 
 /**
- * Schedules both reminder tiers for a car:
- *  - NORMAL: dismissible, fires [reminderOffsetMillis] before sweeping — "I'll eventually move it"
- *  - URGENT: ongoing/non-swipeable, fires [urgentOffsetMillis] before sweeping (if non-null) — "move it now"
- *
- * Already-shown notifications from a previous parked state are cleared first so a stale
- * "move your car" doesn't linger after re-parking or re-scheduling. Pass the parked row's
- * delivery markers when rescheduling an existing row; leave them null for a brand-new one. Also
- * sets the roll-forward alarm that advances the row past this sweep once it has happened.
- *
- * @return whether at least one tier is taken care of (an alarm set, exact or inexact fallback, or a
- *   reminder fired now) — what ParkedState.notificationScheduled records.
+ * The save path, step 1 (saveParkedState / saveUnmanagedParkedState, before the new row is written): clears
+ * the old spot's alarms and notifications for the sources that are NOT armed at save time (closures, tow):
+ * the park-time step arms those for the new spot once it has refreshed their data. The sources armed at save
+ * (sweep, RPP) need no clearing here: arming the new row replaces or cancels their alarms in the same slots.
  */
-suspend fun scheduleParkingReminders(
-    context: Context,
-    carId: Long,
-    carName: String,
-    corridor: String,
-    nextSweepAtMillis: Long,
-    parkedAtMillis: Long,
-    reminderOffsetMillis: Long,
-    urgentOffsetMillis: Long?,
-    normalDeliveredForMillis: Long? = null,
-    urgentDeliveredForMillis: Long? = null
-) = scheduleTiers(
-    context, carId, carName, corridor, nextSweepAtMillis, parkedAtMillis,
-    ReminderKind.NORMAL, ReminderKind.URGENT, reminderOffsetMillis, urgentOffsetMillis,
-    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true,
-    rollKind = RollForwardKind.SWEEP, rollForwardAtMillis = nextSweepAtMillis
-)
+fun clearOldSpotForSourcesArmedLater(context: Context, carId: Long) {
+    for (source in CurbSources.all.filterNot { it.armsAtSave }) {
+        isolated("Clearing the old spot's ${source.id} for car $carId") { source.cancelAll(context, carId) }
+    }
+}
 
 /**
- * Same shape as scheduleParkingReminders, for the RPP non-permit move-by deadline instead of a
- * sweep start time. [zoneLabel] plays the role scheduleParkingReminders' "corridor" does (see
- * buildReminderContent's doc comment). [rollForwardAtMillis] is when the RPP roll-forward alarm
- * should fire — see [rppWindowEndMillis].
+ * The save path, step 2 (after the new row is written): arms the sources armed at save time (sweep, RPP)
+ * for [parked], on the schedule-fresh path (a notification from the previous spot that doesn't belong to the
+ * new deadline is cleared). Delivery markers are all null on a brand-new row, so nothing counts as delivered.
+ *
+ * @return whether a reminder is taken care of (an alarm set, exact or inexact fallback, or a reminder fired
+ *   now) — what ParkedState.notificationScheduled records.
  */
-suspend fun scheduleRppReminders(
-    context: Context,
-    carId: Long,
-    carName: String,
-    zoneLabel: String,
-    moveByAtMillis: Long,
-    parkedAtMillis: Long,
-    reminderOffsetMillis: Long,
-    urgentOffsetMillis: Long?,
-    normalDeliveredForMillis: Long? = null,
-    urgentDeliveredForMillis: Long? = null,
-    rollForwardAtMillis: Long = moveByAtMillis
-) = scheduleTiers(
-    context, carId, carName, zoneLabel, moveByAtMillis, parkedAtMillis,
-    ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, reminderOffsetMillis, urgentOffsetMillis,
-    normalDeliveredForMillis, urgentDeliveredForMillis, clearStaleNotifications = true,
-    rollKind = RollForwardKind.RPP, rollForwardAtMillis = rollForwardAtMillis
-)
+suspend fun armNewParkedRow(context: Context, parked: ParkedState, car: Car): Boolean {
+    val db = AppDatabase.getInstance(context)
+    val settings = loadSourceSettings(context)
+    var row = parked
+    var scheduled = false
+    for (source in CurbSources.all.filter { it.armsAtSave }) {
+        val outcome = isolated("Arming ${source.id} at save for car ${row.carId}") {
+            source.arm(context, db, row, car, settings, clearStaleNotifications = true)
+        } ?: continue
+        row = outcome.parked
+        if (outcome.scheduled) scheduled = true
+    }
+    return scheduled
+}
 
 /**
  * When the enforcement window containing [moveBy] closes — where RPP's roll-forward alarm goes.

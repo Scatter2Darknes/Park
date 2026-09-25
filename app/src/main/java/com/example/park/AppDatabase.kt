@@ -85,10 +85,9 @@ suspend fun saveParkedState(
     // about to set a NEW meter timer for this fresh row (see finishWithMeterTimer in
     // MapScreen.kt) does so afterward, so this can't clobber it.
     cancelMeterTimer(context, carId)
-    // The previous spot's closure alert (alarm + notification). The new spot's is armed by the
-    // park-time check started at the end of this function.
-    cancelClosureAlert(context, carId)
-    cancelTowReminder(context, carId) // likewise the previous spot's tow reminders; the new spot's are armed the same way
+    // The previous spot's closure and tow alarms and notices. The new spot's are armed by the park-time
+    // check started at the end of this function, once it has refreshed their data.
+    clearOldSpotForSourcesArmedLater(context, carId)
     // The whole CURB's schedule, not just the matched row's: a curb is often described by several rows (one per
     // sweep weekday / week pattern), and parking on one must cover them all — see CurbSchedule.
     val curbRows = loadCurbRows(context, segment)
@@ -113,51 +112,25 @@ suspend fun saveParkedState(
         "saveParkedState: RPP match = " + (rppRegulation?.let { "zone=${it.zoneLetters} objectId=${it.objectId} days=${it.days} hrsBegin=${it.hrsBegin} hrsEnd=${it.hrsEnd} hrLimit=${it.hrLimit}" } ?: "none within 30m of $rppMatchOrigin (raw point was $point)")
     )
 
-    db.parkedStateDao().upsert(
-        ParkedState(
-            carId = carId,
-            segmentBlockSweepId = segment.blockSweepId,
-            sideConfirmed = sideConfirmed,
-            parkedLat = point.lat,
-            parkedLng = point.lng,
-            exactPinLat = exactPinLat,
-            exactPinLng = exactPinLng,
-            parkedAtMillis = parkedAtMillis,
-            nextSweepAtMillis = nextMillis,
-            notificationScheduled = false, // updated below once scheduling has actually run
-            rppRegulationId = rppRegulation?.objectId
-        )
+    val parked = ParkedState(
+        carId = carId,
+        segmentBlockSweepId = segment.blockSweepId,
+        sideConfirmed = sideConfirmed,
+        parkedLat = point.lat,
+        parkedLng = point.lng,
+        exactPinLat = exactPinLat,
+        exactPinLng = exactPinLng,
+        parkedAtMillis = parkedAtMillis,
+        nextSweepAtMillis = nextMillis,
+        notificationScheduled = false, // updated below once scheduling has actually run
+        rppRegulationId = rppRegulation?.objectId
     )
+    db.parkedStateDao().upsert(parked)
 
+    // Sweep and RPP for the new row, through their curb sources (CurbSources.kt): the same code every
+    // re-arm runs, each independent of the other (a block can be swept AND RPP-zoned, or one, or neither).
     val car = db.carDao().getAll().firstOrNull { it.id == carId }
-    val settingsRepo = SettingsRepository(context)
-    val offsetMinutes = settingsRepo.notificationOffsetMinutes.first()
-    val urgentEnabled = settingsRepo.urgentReminderEnabled.first()
-    val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
-    val reminderOffsetMillis = offsetMinutes * 60_000L
-    val urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
-
-    val sweepHandled = if (nextMillis != null) {
-        scheduleParkingReminders(
-            context = context,
-            carId = carId,
-            carName = car?.name ?: "Your car",
-            corridor = segment.corridor,
-            nextSweepAtMillis = nextMillis,
-            parkedAtMillis = parkedAtMillis, // markers default to null: this is a brand-new row, nothing delivered yet
-            reminderOffsetMillis = reminderOffsetMillis,
-            urgentOffsetMillis = urgentOffsetMillis
-        )
-    } else {
-        cancelSweepReminder(context, carId) // re-parked somewhere with no upcoming sweep: drop the previous spot's alarms
-        false
-    }
-
-    // Independent of the sweep reminder above — a block can be both swept AND RPP-zoned, or
-    // only one, or neither.
-    val rppHandled = scheduleRppForParkedCar(
-        context, carId, car, rppRegulation, parkedAtMillis, parkedAt, reminderOffsetMillis, urgentOffsetMillis
-    )
+    val scheduled = armNewParkedRowOrClear(context, parked, car)
 
     // Parked while a sweep is ALREADY under way: the scheduling above only knows about the NEXT
     // occurrence (next week's), so without this the user would get no warning at all that they've
@@ -190,7 +163,7 @@ suspend fun saveParkedState(
     // Records what actually happened (an alarm was set — exact or the inexact fallback — or a
     // reminder fired right away), not merely that a deadline existed. Guarded by parkedAtMillis
     // like the delivery markers, so it can't land on a newer row from a racing re-park.
-    db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, sweepHandled || rppHandled)
+    db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, scheduled)
 
     enqueueWidgetRefresh(context)
     // Runs in the background AFTER the save: never delays it (spec §3, park-time fetch).
@@ -198,48 +171,15 @@ suspend fun saveParkedState(
 }
 
 /**
- * The RPP half of [saveParkedState], pulled out so [saveUnmanagedParkedState] (no sweep
- * segment, but still worth its own independent RPP check — see that function's doc comment)
- * can schedule an RPP reminder the exact same way instead of duplicating this logic.
- * car is looked up fresh by the caller (not defaulted) since nextRppDeadline needs its
- * permitZoneLetters to know whether a warning even applies. Returns whether an RPP reminder
- * ended up scheduled (an alarm set, or one fired immediately).
+ * Arms the save-time sources (sweep, RPP) for a row just written; see armNewParkedRow. [car] is null only
+ * when the car was deleted while the park was being saved: then there's nothing to remind about, and the
+ * previous spot's sweep and RPP alarms are cleared instead of being left behind.
  */
-private suspend fun scheduleRppForParkedCar(
-    context: Context,
-    carId: Long,
-    car: Car?,
-    rppRegulation: RppZoneRegulation?,
-    parkedAtMillis: Long,
-    parkedAt: java.time.LocalDateTime,
-    reminderOffsetMillis: Long,
-    urgentOffsetMillis: Long?
-): Boolean {
-    val rppDeadline = if (rppRegulation != null && car != null) {
-        nextRppDeadline(rppRegulation, car, parkedSince = parkedAt, from = parkedAt)
-    } else null
-    android.util.Log.d(
-        "RppSync",
-        "scheduleRppForParkedCar: RPP deadline = " + (rppDeadline?.moveByDateTime?.toString()
-            ?: if (rppRegulation == null) "n/a (no match)" else "n/a (car holds a permit for this zone, its DAYS didn't parse, hrLimit=${rppRegulation.hrLimit} leaves no usable limit, or no violation is possible in its window)")
-    )
-    return if (rppDeadline != null) {
-        scheduleRppReminders(
-            context = context,
-            carId = carId,
-            carName = car?.name ?: "Your car",
-            zoneLabel = rppZoneLabel(rppDeadline),
-            moveByAtMillis = rppDeadline.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli(),
-            parkedAtMillis = parkedAtMillis,
-            reminderOffsetMillis = reminderOffsetMillis,
-            urgentOffsetMillis = urgentOffsetMillis,
-            rollForwardAtMillis = rppRegulation?.let { rppWindowEndMillis(it, rppDeadline.moveByDateTime) }
-                ?: rppDeadline.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli()
-        )
-    } else {
-        cancelRppReminder(context, carId) // no RPP match here, car holds a permit, or re-parking away from a previous RPP spot
-        false
-    }
+private suspend fun armNewParkedRowOrClear(context: Context, parked: ParkedState, car: Car?): Boolean {
+    if (car != null) return armNewParkedRow(context, parked, car)
+    cancelSweepReminder(context, parked.carId)
+    cancelRppReminder(context, parked.carId)
+    return false
 }
 
 /**
@@ -276,8 +216,7 @@ suspend fun saveUnmanagedParkedState(
     // See saveParkedState's identical call for why this is unconditional and safe to run
     // before a caller sets a fresh meter timer for this same row.
     cancelMeterTimer(context, carId)
-    cancelClosureAlert(context, carId) // as in saveParkedState
-    cancelTowReminder(context, carId)
+    clearOldSpotForSourcesArmedLater(context, carId) // as in saveParkedState
 
     val rppRegulation = findConfidentRppMatch(context, point)
     android.util.Log.d(
@@ -285,42 +224,31 @@ suspend fun saveUnmanagedParkedState(
         "saveUnmanagedParkedState: RPP match = " + (rppRegulation?.let { "zone=${it.zoneLetters} objectId=${it.objectId}" } ?: "none within 30m of $point")
     )
 
-    db.parkedStateDao().upsert(
-        ParkedState(
-            carId = carId,
-            segmentBlockSweepId = null,
-            sideConfirmed = true,
-            parkedLat = point.lat,
-            parkedLng = point.lng,
-            exactPinLat = exactPinLat,
-            exactPinLng = exactPinLng,
-            parkedAtMillis = parkedAtMillis,
-            nextSweepAtMillis = null,
-            notificationScheduled = false, // updated below once RPP scheduling (if any) has run
-            rppRegulationId = rppRegulation?.objectId,
-            parkedViaSafeLocationId = viaSafeLocationId
-        )
+    val parked = ParkedState(
+        carId = carId,
+        segmentBlockSweepId = null,
+        sideConfirmed = true,
+        parkedLat = point.lat,
+        parkedLng = point.lng,
+        exactPinLat = exactPinLat,
+        exactPinLng = exactPinLng,
+        parkedAtMillis = parkedAtMillis,
+        nextSweepAtMillis = null,
+        notificationScheduled = false, // updated below once RPP scheduling (if any) has run
+        // An off-street saved location (garage, lot) gets no RPP reminder, but the match is still STORED, so
+        // switching the location's off-street flag off later brings the reminder back (see isParkedOffStreet,
+        // which the RPP source checks).
+        rppRegulationId = rppRegulation?.objectId,
+        parkedViaSafeLocationId = viaSafeLocationId
     )
+    db.parkedStateDao().upsert(parked)
 
-    cancelSweepReminder(context, carId) // clear any stale sweep alarms from a previous real park
-    // no scheduleParkingReminders call — no segment means no sweep schedule to remind about
-
+    // Through the same curb sources as saveParkedState: with no segment the sweep source has no deadline, so
+    // it just clears a previous real park's sweep alarms; RPP gets its own independent check.
     val car = db.carDao().getAll().firstOrNull { it.id == carId }
-    val settingsRepo = SettingsRepository(context)
-    val offsetMinutes = settingsRepo.notificationOffsetMinutes.first()
-    val urgentEnabled = settingsRepo.urgentReminderEnabled.first()
-    val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
-    // An off-street saved location (garage, lot) gets no RPP reminder. The match is still STORED above,
-    // so switching the location's off-street flag off later brings the reminder back (see isParkedOffStreet).
-    val offStreet = viaSafeLocationId != null &&
-        db.savedLocationDao().getAll().firstOrNull { it.id == viaSafeLocationId }?.isOffStreet == true
-    val rppHandled = scheduleRppForParkedCar(
-        context, carId, car, rppRegulation.takeIf { !offStreet }, parkedAtMillis, parkedAt,
-        reminderOffsetMillis = offsetMinutes * 60_000L,
-        urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null
-    )
+    val scheduled = armNewParkedRowOrClear(context, parked, car)
 
-    db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, rppHandled)
+    db.parkedStateDao().setNotificationScheduled(carId, parkedAtMillis, scheduled)
     enqueueWidgetRefresh(context)
     // Closures still matter here: a closed street can block a garage exit (spec §4).
     ClosureCheckCenter.start(context, carId, parkedAtMillis)

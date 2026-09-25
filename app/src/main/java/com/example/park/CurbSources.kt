@@ -54,8 +54,10 @@ suspend fun loadSourceSettings(context: Context): SourceSettings {
 /**
  * What arming one source did. [parked] is the row as the NEXT source should see it: the sweep source
  * stores a recomputed deadline on it. [deadlineChanged] tells armAllParkedStates to redraw the widget.
+ * [scheduled]: a reminder is taken care of (an alarm set, or fired now), which the save path records in
+ * ParkedState.notificationScheduled.
  */
-class ArmOutcome(val parked: ParkedState, val deadlineChanged: Boolean = false)
+class ArmOutcome(val parked: ParkedState, val deadlineChanged: Boolean = false, val scheduled: Boolean = false)
 
 /**
  * What one source contributes to a car's status line, from stored data. A `sealed interface` is a
@@ -83,6 +85,14 @@ interface CurbRestrictionSource {
 
     /** Whether the user has this source switched on. A switched-off source still cancels what it owns. */
     fun isEnabled(settings: SourceSettings): Boolean
+
+    /**
+     * Armed the moment a park is saved (saveParkedState), from the data already on the phone. False for the
+     * sources whose data the park-time step refreshes first (closures, tow): arming them at save time from
+     * older data could post an alert the refresh then shows was wrong. Those are only cancelled at save time
+     * (the old spot's), and armed by the park-time step's re-arm.
+     */
+    val armsAtSave: Boolean
 
     /**
      * Arms, fires or cancels this source's reminders for one parked car. Called by armParkedState for
@@ -160,6 +170,7 @@ object SweepSource : CurbRestrictionSource {
     )
 
     override fun isEnabled(settings: SourceSettings) = true
+    override val armsAtSave = true
 
     /**
      * A notification for a deadline that was MOVED before it happened (an override or data change while it
@@ -193,8 +204,9 @@ object SweepSource : CurbRestrictionSource {
         val clearStale = clearStaleNotifications || scheduleMoved
 
         val nextMillis = row.nextSweepAtMillis
+        var scheduled = false
         if (nextMillis != null) {
-            scheduleTiers(
+            scheduled = scheduleTiers(
                 context, row.carId, car.name, segment?.corridor ?: "your parked street",
                 nextMillis, row.parkedAtMillis,
                 ReminderKind.NORMAL, ReminderKind.URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
@@ -211,7 +223,7 @@ object SweepSource : CurbRestrictionSource {
                 NotificationHelper.cancel(context, reminderNotificationId(row.carId, ReminderKind.URGENT))
             }
         }
-        return ArmOutcome(row, deadlineChanged)
+        return ArmOutcome(row, deadlineChanged, scheduled)
     }
 
     override fun deadline(status: CarWithStatus) =
@@ -236,13 +248,15 @@ object RppSource : CurbRestrictionSource {
     )
 
     override fun isEnabled(settings: SourceSettings) = true
+    override val armsAtSave = true
 
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
     ): ArmOutcome {
         val rpp = resolveRpp(context, parked, car)
+        var scheduled = false
         if (rpp != null) {
-            scheduleTiers(
+            scheduled = scheduleTiers(
                 context, parked.carId, car.name,
                 rppZoneLabel(rpp.warning),
                 rpp.moveByMillis, parked.parkedAtMillis,
@@ -258,7 +272,7 @@ object RppSource : CurbRestrictionSource {
             cancelAlarm(context, parked.carId, ReminderKind.RPP_URGENT)
             cancelRollForward(context, parked.carId, RollForwardKind.RPP)
         }
-        return ArmOutcome(parked)
+        return ArmOutcome(parked, scheduled = scheduled)
     }
 
     override suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult =
@@ -287,6 +301,7 @@ object MeterSource : CurbRestrictionSource {
     override val notificationPurposes = emptySet<NotificationIds.Purpose>()
 
     override fun isEnabled(settings: SourceSettings) = true
+    override val armsAtSave = false // nothing to arm: the user sets the timer after parking
 
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
@@ -307,6 +322,7 @@ object ClosureSource : CurbRestrictionSource {
     override val notificationPurposes = setOf(NotificationIds.Purpose.CLOSURE_ALERT, NotificationIds.Purpose.CLOSURE_NEARBY)
 
     override fun isEnabled(settings: SourceSettings) = settings.closuresEnabled
+    override val armsAtSave = false // the park-time step refreshes closure data, then arms
 
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
@@ -352,6 +368,7 @@ object TowSource : CurbRestrictionSource {
 
     /** Its own switch, plus one of the closure switches that fetch the data (SettingsRepository.towEnabled). */
     override fun isEnabled(settings: SourceSettings) = settings.towEnabled
+    override val armsAtSave = false // the park-time step refreshes tow data, then arms
 
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean

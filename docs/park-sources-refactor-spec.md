@@ -406,7 +406,11 @@ Clariti 838, `sftu-nd43` 155, Active Street-Use 4,206 (Street-Use approved since
 - Meter owns no alarm or id slot: its timer is cancelled directly by the unpark cleanup, per the spec.
 - RPP has no "can't tell" state: a failed RPP resolve shows no RPP line.
 
-### Remaining save-path leftover (for the follow-up spec)
+### Save-path leftover — DONE on branch `save-path-sources` (2026-09-25)
+The save path now arms through the sources: `clearOldSpotForSourcesArmedLater` (closures, tow: cancelled at
+save, armed by the park-time step after its refresh) and `armNewParkedRow` (sweep, RPP; `armsAtSave`). The third
+RPP resolver, `scheduleParkingReminders`, `scheduleRppReminders` and `scheduleRppForParkedCar` are gone. The
+characterization tests passed unedited. What it replaced:
 `saveParkedState` / `saveUnmanagedParkedState` (`AppDatabase.kt:127-147, 195-230, 304`) still arm sweep and RPP
 directly via `scheduleParkingReminders` / `scheduleRppForParkedCar`, with a third RPP resolver
 (`nextRppDeadline(..., from = parkedAt)`, own roll-forward fallback when the regulation is null); post the
