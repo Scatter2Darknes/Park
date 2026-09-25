@@ -24,54 +24,10 @@ import java.util.concurrent.TimeUnit
  * caught up to reality, even though the car was connected the whole time.
  */
 private suspend fun resyncBluetoothConnectionState(context: Context) {
-    if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT)
-        != PackageManager.PERMISSION_GRANTED
-    ) return
-
-    val bluetoothManager = context.getSystemService(BluetoothManager::class.java) ?: return
-    val bondedDevices = try {
-        bluetoothManager.adapter?.bondedDevices ?: return
-    } catch (e: SecurityException) {
-        return
-    }
-
-    val cars = AppDatabase.getInstance(context).carDao().getAll()
-    val connected = bondedDevices.mapNotNull { device ->
-        val car = cars.firstOrNull {
-            it.bluetoothDeviceAddress?.equals(device.address, ignoreCase = true) == true
-        } ?: return@mapNotNull null
-        if (!isDeviceCurrentlyConnected(device)) return@mapNotNull null
-        val name = try { device.name ?: device.address } catch (e: SecurityException) { device.address }
-        device.address to (car.id to name)
-    }.toMap()
-
+    // Shared with refreshBluetoothLinks (BluetoothLinkSync.kt), which does the same after a link changes.
+    val connected = connectedLinkedDevices(context) ?: return
     if (connected.isNotEmpty()) {
         BluetoothConnectionCenter.resyncFromConnectedDevices(connected)
-    }
-}
-
-/**
- * There's no stable *public* API across Android versions for "is this bonded classic
- * Bluetooth device ACL-connected right now" — BluetoothDevice.isConnected() has existed on the
- * framework side for years but was only unhidden as public API recently, inconsistently
- * across compileSdk/OS combinations (two straight guesses at calling it directly both failed
- * to even compile here, which is exactly that inconsistency showing up). This reflects on the
- * hidden method instead — the same technique most third-party Bluetooth apps have used for
- * this for years — but it's still an unofficial, unsupported surface that could throw, return
- * the wrong thing, or vanish on a given OEM/OS build.
- *
- * HIGHER-RISK UNVERIFIED than the rest of this file's UNVERIFIED items — actually connect and
- * disconnect a linked device, kill the app, and relaunch it on the S25 before trusting this.
- * If it's unreliable in practice, the safe fallback is deleting this function's body down to
- * `return false` — that just brings back the pre-existing gap (no cold-start resync), not a
- * regression, since nothing else in the app depends on this succeeding.
- */
-private fun isDeviceCurrentlyConnected(device: android.bluetooth.BluetoothDevice): Boolean {
-    return try {
-        val method = device.javaClass.getMethod("isConnected")
-        method.invoke(device) as? Boolean ?: false
-    } catch (e: Exception) {
-        false
     }
 }
 

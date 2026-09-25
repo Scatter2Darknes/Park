@@ -54,6 +54,9 @@ object BluetoothConnectionCenter {
     private val _parkedStateVersion = MutableStateFlow(0L)
     val parkedStateVersion = _parkedStateVersion.asStateFlow()
 
+    /** The cars whose linked device is connected right now, as far as this center knows. */
+    fun connectedCarIdsNow(): Set<Long> = _connectedCarIds.value
+
     fun notifyParkedStateChanged() {
         _parkedStateVersion.value = System.currentTimeMillis()
     }

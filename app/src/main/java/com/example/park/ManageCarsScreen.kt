@@ -209,9 +209,22 @@ fun ManageCarsScreen(onBack: () -> Unit, onSeeCarLocation: (LatLng) -> Unit) {
                             }
                             ?.let { other -> db.carDao().update(other.copy(bluetoothDeviceAddress = null)) }
                     }
+                    // Unlinking a car whose device is connected RIGHT NOW: its drive is no longer watched.
+                    val unlinkedMidDrive = address == null && car.bluetoothDeviceAddress != null &&
+                        car.id in BluetoothConnectionCenter.connectedCarIdsNow()
                     db.carDao().update(car.copy(bluetoothDeviceAddress = address))
                     linkingBluetoothCar = null
+                    // No connect/disconnect broadcast happens for a link change, so re-read what's connected:
+                    // a device linked while already on shows as driving now, an unlinked one stops.
+                    refreshBluetoothLinks(context)
                     reload()
+                    if (unlinkedMidDrive) {
+                        snackbarHostState.showSnackbar(
+                            "${car.name} is unlinked while its Bluetooth is connected, so it won't be auto-parked " +
+                                "when you stop. Park it manually.",
+                            duration = SnackbarDuration.Long
+                        )
+                    }
                 }
             },
             onDismiss = { linkingBluetoothCar = null }

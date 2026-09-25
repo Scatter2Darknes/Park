@@ -92,6 +92,7 @@ suspend fun deleteCarCompletely(context: Context, car: Car): DeletedCarSnapshot 
     if (car.isDefault) {
         db.carDao().getAll().firstOrNull()?.let { db.carDao().setDefault(it.id) }
     }
+    refreshBluetoothLinks(context) // a deleted car must not stay "driving" if its device is connected
     enqueueWidgetRefresh(context)
     return DeletedCarSnapshot(car, parkedState)
 }
@@ -117,6 +118,8 @@ suspend fun undoDeleteCar(context: Context, snapshot: DeletedCarSnapshot) {
     // directly — correctness matters more than avoiding one extra query pass for an undo action
     // that only runs on an explicit tap.
     rescheduleAllActiveReminders(context)
+    // Show it as driving again if its device is connected, but don't unpark the parked state just restored.
+    refreshBluetoothLinks(context, runMissedConnect = false)
     enqueueWidgetRefresh(context)
 }
 
