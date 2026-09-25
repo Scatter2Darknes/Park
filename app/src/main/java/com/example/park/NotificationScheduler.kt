@@ -112,7 +112,7 @@ fun setAlarm(
     }
 }
 
-private fun cancelAlarm(context: Context, carId: Long, kind: ReminderKind) {
+internal fun cancelAlarm(context: Context, carId: Long, kind: ReminderKind) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val intent = Intent(context, ParkingReminderReceiver::class.java)
     val pendingIntent = PendingIntent.getBroadcast(
@@ -254,7 +254,7 @@ private fun rollForwardRequestCode(carId: Long, kind: RollForwardKind): Int = No
     RollForwardKind.TOW -> NotificationIds.Purpose.ROLL_FORWARD_TOW
 })
 
-private fun cancelRollForward(context: Context, carId: Long, kind: RollForwardKind) {
+internal fun cancelRollForward(context: Context, carId: Long, kind: RollForwardKind) {
     val alarmManager = context.getSystemService(AlarmManager::class.java)
     val pendingIntent = PendingIntent.getBroadcast(
         context, rollForwardRequestCode(carId, kind),
@@ -305,7 +305,7 @@ private fun scheduleRollForward(
  *    ongoing urgent one shouldn't vanish because they changed an unrelated setting.
  *  - false ("re-arm": boot / app foreground): never cancels any notification.
  */
-private suspend fun scheduleTiers(
+internal suspend fun scheduleTiers(
     context: Context,
     carId: Long,
     carName: String,
@@ -461,57 +461,20 @@ fun cancelSweepReminder(context: Context, carId: Long) {
     NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.URGENT))
 }
 
-/** Cancels every alarm tier — sweep AND RPP — and any currently-shown notifications for a car.
- *  The single call site every "this car is no longer parked" path (unsubscribe, delete) needs,
- *  so neither reminder kind has to be remembered separately at those call sites. */
+/** Cancels every alarm and every currently-shown notification for a car: each curb source's (see
+ *  CurbSources) plus the car's non-source ones. The single call site every "this car is no longer
+ *  parked" path (unsubscribe, delete) needs, so nothing has to be remembered separately there. */
 fun cancelParkingReminder(context: Context, carId: Long) {
-    cancelAlarm(context, carId, ReminderKind.NORMAL)
-    cancelAlarm(context, carId, ReminderKind.URGENT)
-    cancelRollForward(context, carId, RollForwardKind.SWEEP)
-    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.NORMAL))
-    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.URGENT))
-    NotificationHelper.cancel(context, reminderNotificationId(carId, ReminderKind.SWEEP_ACTIVE))
-    // The Bluetooth "Did X just park?" / "X unparked" notices belong to this car's parked state too;
-    // left behind after an unpark or a car delete they'd point at a spot that no longer exists.
-    // (The unpark path posts its own fresh notice AFTER calling this, so it isn't affected.)
+    for (source in CurbSources.all) source.cancelAll(context, carId)
+    // Not curb sources, but they belong to this car's parked state too:
+    // The Bluetooth "Did X just park?" / "X unparked" notices; left behind after an unpark or a car
+    // delete they'd point at a spot that no longer exists. (The unpark path posts its own fresh notice
+    // AFTER calling this, so it isn't affected.)
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_DETECT))
     NotificationHelper.cancel(context, NotificationIds.forCar(carId, NotificationIds.Purpose.BLUETOOTH_AUTO_UNPARK))
-    cancelRppReminder(context, carId)
     // A manual meter timer belongs to the spot it was set at, same as everything else here —
     // stale once the car is no longer parked there.
     cancelMeterTimer(context, carId)
-    cancelClosureAlert(context, carId) // likewise a closure alert
-    cancelTowReminder(context, carId) // and the tow family
-}
-
-/** An RPP deadline plus the two epoch-millis values derived from it. */
-private class RppDeadlineInfo(val warning: RppWarning, val moveByMillis: Long, val rollForwardAtMillis: Long)
-
-/**
- * The RPP deadline for [parked] as of now, or null when none applies (no regulation matched,
- * the car holds a permit, or the days didn't parse).
- *
- * Nothing stores this deadline — it's recomputed every time from the regulation, the car and
- * parked-at time. That's safe for delivery markers because the result is deterministic: for a
- * given parked row it stays the same value from the moment of parking until the deadline's own
- * window closes (see RppRearmDeterminismTest), so the value recorded when a reminder is
- * delivered still matches the value recomputed at a later re-arm.
- */
-private suspend fun currentRppDeadline(
-    context: Context,
-    db: AppDatabase,
-    parked: ParkedState,
-    car: Car
-): RppDeadlineInfo? {
-    if (isParkedOffStreet(context, parked)) return null // a garage or lot: no street time limit
-    val regulation = parked.rppRegulationId?.let { db.rppZoneRegulationDao().getById(it) } ?: return null
-    val parkedSince = Instant.ofEpochMilli(parked.parkedAtMillis).atZone(SF_ZONE).toLocalDateTime()
-    val warning = nextRppDeadline(regulation, car, parkedSince, sfNow()) ?: return null
-    return RppDeadlineInfo(
-        warning,
-        warning.moveByDateTime.atZone(SF_ZONE).toInstant().toEpochMilli(),
-        rppWindowEndMillis(regulation, warning.moveByDateTime)
-    )
 }
 
 /** Serializes arming: the foreground trigger and the boot trigger (and Settings changes, sync,
@@ -520,121 +483,26 @@ private suspend fun currentRppDeadline(
  *  not reentrant, so only the public entry points take it; the private helpers below don't. */
 private val armMutex = Mutex()
 
-private class ArmSettings(
-    val reminderOffsetMillis: Long,
-    val urgentOffsetMillis: Long?,
-    val closuresEnabled: Boolean,
-    val closureLeadMillis: Long,
-    val towEnabled: Boolean
-)
-
-private suspend fun loadArmSettings(context: Context): ArmSettings {
-    val settingsRepo = SettingsRepository(context)
-    val offsetMinutes = settingsRepo.notificationOffsetMinutes.first()
-    val urgentEnabled = settingsRepo.urgentReminderEnabled.first()
-    val urgentOffsetMinutes = settingsRepo.urgentOffsetMinutes.first()
-    return ArmSettings(
-        reminderOffsetMillis = offsetMinutes * 60_000L,
-        urgentOffsetMillis = if (urgentEnabled) urgentOffsetMinutes * 60_000L else null,
-        closuresEnabled = settingsRepo.closuresEnabled(),
-        closureLeadMillis = closureLeadMillis(context),
-        towEnabled = settingsRepo.towEnabled()
-    )
-}
-
 /**
- * Brings one parked car fully up to date: recomputes its sweep deadline from the segment as it is
- * NOW (so a "Fix schedule" override, refreshed street data, or a sweep that has since passed are
- * all picked up), stores it if it changed, then schedules both reminder families and their
- * roll-forward alarms. Returns whether the stored deadline changed.
- *
- * A notification for a deadline that has been MOVED before it happened (an override or data
- * change while it was still ahead) is stale, so those are cleared even when [clearStaleNotifications]
- * is false. A deadline that merely PASSED and rolled to the next occurrence is not stale — its
- * notification is what the user is looking at — so that case leaves notifications alone.
+ * Brings one parked car fully up to date by arming every curb source in turn (CurbSources.all, in
+ * order): sweeping first, which recomputes the deadline from the curb as it is NOW and stores it if it
+ * changed, then RPP, the meter timer, closures and tow zones. Returns whether the stored sweep deadline
+ * changed (the widget shows it, so it has to be redrawn).
  */
 private suspend fun armParkedState(
     context: Context,
     db: AppDatabase,
     storedParked: ParkedState,
     car: Car,
-    settings: ArmSettings,
+    settings: SourceSettings,
     clearStaleNotifications: Boolean
 ): Boolean {
-    val now = System.currentTimeMillis()
     var parked = storedParked
     var deadlineChanged = false
-    var scheduleMoved = false
-
-    val segment = parked.segmentBlockSweepId?.let { db.streetSegmentDao().getById(it) }
-    // A segment that's gone (never synced, or retired upstream) keeps its stored deadline: a
-    // reminder that might be stale beats silently dropping one that might be real.
-    if (segment != null) {
-        // Across every row of the curb (see CurbSchedule), so a sweep day carried by a sibling row is never lost.
-        val recomputed = CurbSchedule.nextSweepDateTime(loadCurbRows(context, segment))
-            ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
-        val old = parked.nextSweepAtMillis
-        if (recomputed != old) {
-            android.util.Log.d("Park", "Recomputed sweep deadline for car ${parked.carId}: $old -> $recomputed")
-            db.parkedStateDao().updateNextSweep(parked.carId, parked.parkedAtMillis, recomputed)
-            parked = parked.copy(nextSweepAtMillis = recomputed)
-            deadlineChanged = true
-            scheduleMoved = old != null && old > now
-        }
-    }
-    val clearStale = clearStaleNotifications || scheduleMoved
-
-    val nextMillis = parked.nextSweepAtMillis
-    if (nextMillis != null) {
-        scheduleTiers(
-            context, parked.carId, car.name, segment?.corridor ?: "your parked street",
-            nextMillis, parked.parkedAtMillis,
-            ReminderKind.NORMAL, ReminderKind.URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
-            parked.normalDeliveredForMillis, parked.urgentDeliveredForMillis, clearStale,
-            RollForwardKind.SWEEP, nextMillis
-        )
-    } else {
-        // No upcoming occurrence: nothing to remind about, and any alarm left over is for a deadline that no longer exists.
-        cancelAlarm(context, parked.carId, ReminderKind.NORMAL)
-        cancelAlarm(context, parked.carId, ReminderKind.URGENT)
-        cancelRollForward(context, parked.carId, RollForwardKind.SWEEP)
-        if (clearStale) {
-            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.NORMAL))
-            NotificationHelper.cancel(context, reminderNotificationId(parked.carId, ReminderKind.URGENT))
-        }
-    }
-
-    val rpp = currentRppDeadline(context, db, parked, car)
-    if (rpp != null) {
-        scheduleTiers(
-            context, parked.carId, car.name,
-            rppZoneLabel(rpp.warning),
-            rpp.moveByMillis, parked.parkedAtMillis,
-            ReminderKind.RPP_NORMAL, ReminderKind.RPP_URGENT, settings.reminderOffsetMillis, settings.urgentOffsetMillis,
-            parked.rppNormalDeliveredForMillis, parked.rppUrgentDeliveredForMillis, clearStaleNotifications,
-            RollForwardKind.RPP, rpp.rollForwardAtMillis
-        )
-    } else if (clearStaleNotifications) {
-        cancelRppReminder(context, parked.carId) // no regulation matched, car holds a permit, or nothing found
-    } else {
-        // Re-arm never touches notifications — only the (now pointless) alarms.
-        cancelAlarm(context, parked.carId, ReminderKind.RPP_NORMAL)
-        cancelAlarm(context, parked.carId, ReminderKind.RPP_URGENT)
-        cancelRollForward(context, parked.carId, RollForwardKind.RPP)
-    }
-
-    // Street closures: independent of both families above, and never allowed to break them.
-    try {
-        armClosureAlert(context, parked, car.name, settings.closuresEnabled, settings.closureLeadMillis)
-    } catch (e: Exception) {
-        android.util.Log.w("ClosureAlert", "Arming the closure alert for car ${parked.carId} failed", e)
-    }
-
-    // Tow zones: a third deadline family, likewise never allowed to break the others.
-    try {
-        armTowReminders(context, parked, car, settings, clearStaleNotifications)
-    } catch (e: Exception) {
-        android.util.Log.w("TowAlert", "Arming the tow reminders for car ${parked.carId} failed", e)
+    for (source in CurbSources.all) {
+        val outcome = source.arm(context, db, parked, car, settings, clearStaleNotifications)
+        parked = outcome.parked
+        if (outcome.deadlineChanged) deadlineChanged = true
     }
     return deadlineChanged
 }
@@ -646,11 +514,11 @@ private suspend fun armParkedState(
  * park-time notice instead. Tow checks switched off in Settings clears everything, alarms and
  * notifications alike, like closures.
  */
-private suspend fun armTowReminders(
+internal suspend fun armTowReminders(
     context: Context,
     parked: ParkedState,
     car: Car,
-    settings: ArmSettings,
+    settings: SourceSettings,
     clearStaleNotifications: Boolean
 ) {
     if (!settings.towEnabled) {
@@ -696,7 +564,7 @@ private suspend fun armTowReminders(
 
 private suspend fun armAllParkedStates(context: Context, clearStaleNotifications: Boolean) = armMutex.withLock {
     val db = AppDatabase.getInstance(context)
-    val settings = loadArmSettings(context)
+    val settings = loadSourceSettings(context)
     val carsById = db.carDao().getAll().associateBy { it.id }
 
     var anyDeadlineChanged = false
@@ -727,7 +595,7 @@ suspend fun recomputeParkedSchedule(context: Context, carId: Long, expectedParke
             return@withLock
         }
         val car = db.carDao().getAll().firstOrNull { it.id == carId } ?: return@withLock
-        val changed = armParkedState(context, db, parked, car, loadArmSettings(context), clearStaleNotifications = false)
+        val changed = armParkedState(context, db, parked, car, loadSourceSettings(context), clearStaleNotifications = false)
         if (changed) enqueueWidgetRefresh(context)
     }
 

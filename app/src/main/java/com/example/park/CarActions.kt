@@ -25,51 +25,32 @@ enum class DeadlineKind { SWEEP, RPP, METER, TOW }
 data class CarDeadline(val millis: Long, val kind: DeadlineKind)
 
 /**
- * Whichever binding deadline is sooner for this car — sweep start, RPP non-permit move-by, or
- * a manually-set meter timer — since a parked car can have any combination of these, or none.
- * Backs every place that ranks/displays "the thing this car needs to move for" (the map's
- * priority banner, the widget), so none of them silently ignore a deadline that's more urgent
- * than (or the only) one sweep data alone would show.
+ * Whichever binding deadline is soonest for this car — sweep start, RPP non-permit move-by, a
+ * manually-set meter timer, or the next tow-zone enforcement window — since a parked car can have
+ * any combination of these, or none. Each curb source contributes its own (CurbRestrictionSource.deadline;
+ * closures never do). Backs every place that ranks/displays "the thing this car needs to move for"
+ * (the map's priority banner, the widget), so none of them silently ignore a deadline that's more
+ * urgent than (or the only) one sweep data alone would show. A tie goes to the earlier source in
+ * CurbSources.all.
  */
-fun CarWithStatus.soonestDeadline(): CarDeadline? {
-    val sweep = parkedState?.nextSweepAtMillis?.let { CarDeadline(it, DeadlineKind.SWEEP) }
-    val rpp = rppDeadline?.moveByDateTime
-        ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
-        ?.let { CarDeadline(it, DeadlineKind.RPP) }
-    val meter = parkedState?.meterTimerAtMillis?.let { CarDeadline(it, DeadlineKind.METER) }
-    val tow = towDeadlineMillis?.let { CarDeadline(it, DeadlineKind.TOW) }
-    return listOfNotNull(sweep, rpp, meter, tow).minByOrNull { it.millis }
-}
+fun CarWithStatus.soonestDeadline(): CarDeadline? =
+    CurbSources.all.mapNotNull { it.deadline(this) }.minByOrNull { it.millis }
 
+/** Every car with its parked state and each curb source's status for it (see CurbRestrictionSource.resolve). */
 suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
     val db = AppDatabase.getInstance(context)
-    val settings = SettingsRepository(context)
-    val closuresEnabled = settings.closuresEnabled() // both closure features off = no closure line at all
-    val closuresLastSync = settings.closuresLastSyncMillis.first()
-    val closureLead = closureLeadMillis(context)
-    val towEnabled = settings.towEnabled()
+    val settings = loadSourceSettings(context)
     return db.carDao().getAll().map { car ->
         val parked = db.parkedStateDao().getForCar(car.id)
-        val rppDeadline = parked?.let { resolveRppDeadline(context, it, car) }
-        val closureStatus = parked?.takeIf { closuresEnabled }?.let {
-            try {
-                resolveClosureStatus(context, it, closuresLastSync, closureLead)
-            } catch (e: Exception) {
-                android.util.Log.w("ClosureAlert", "Resolving closure status for car ${car.id} failed", e)
-                ClosureStatus.Unchecked // can't tell, so never "clear"
-            }
-        }
-        var towDeadline: Long? = null
-        val towStatus = parked?.takeIf { towEnabled }?.let {
-            try {
-                towDeadline = resolveTowDeadlineMillis(context, it)
-                resolveTowStatus(context, it, closureLead)
-            } catch (e: Exception) {
-                android.util.Log.w("TowAlert", "Resolving tow status for car ${car.id} failed", e)
-                TowStatus.Unchecked // can't tell, so never "clear"
-            }
-        }
-        CarWithStatus(car, parked, rppDeadline, closureStatus, towDeadline, towStatus)
+        val results = if (parked == null) emptyList() else CurbSources.all.map { it.resolve(context, parked, car, settings) }
+        val tow = results.firstNotNullOfOrNull { it as? SourceResult.Tow }
+        CarWithStatus(
+            car, parked,
+            rppDeadline = results.firstNotNullOfOrNull { (it as? SourceResult.Rpp)?.warning },
+            closureStatus = results.firstNotNullOfOrNull { (it as? SourceResult.Closure)?.status },
+            towDeadlineMillis = tow?.deadlineMillis,
+            towStatus = tow?.status
+        )
     }
 }
 

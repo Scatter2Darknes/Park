@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -426,30 +427,22 @@ private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parke
     if (!settings.closuresEnabled()) return
     val fetchAllowed = settings.closureParkTimeCheck.first()
     if (fetchAllowed) {
-        // Both feeds at once, each inside the same short budget, so the Bluetooth receiver's wait
-        // (CLOSURE_CHECK_RECEIVER_WAIT_MILLIS) still covers the whole check.
+        // Phase 1: every source's data at once (closures and tow zones today), each inside the same short
+        // budget, so the Bluetooth receiver's wait (CLOSURE_CHECK_RECEIVER_WAIT_MILLIS) still covers the whole check.
         coroutineScope {
-            val closures = async { refreshIfOlderThan(settings.closuresLastSyncMillis.first(), "closure") { StreetClosureRepository(context).refreshFromNetwork() } }
-            val tow = async { refreshIfOlderThan(settings.towLastSyncMillis.first(), "tow-zone") { TowZoneRepository(context).refreshFromNetwork() } }
-            closures.await()
-            tow.await()
+            CurbSources.all.map { source -> async { source.refreshForPark(context) } }.awaitAll()
         }
     }
+    // Re-arm the car ONCE, with whatever the refresh brought in.
     recomputeParkedSchedule(context, carId, expectedParkedAtMillis = parkedAtMillis)
-    notifyNearbyClosureOnPark(context, carId, parkedAtMillis)
-    try {
-        notifyTowOnPark(context, carId, parkedAtMillis)
-    } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        Log.w(TAG, "park-time tow notice failed for car $carId", e)
-    }
+    // Phase 2: the once-per-park notices, in registry order (closure, then tow).
+    for (source in CurbSources.all) source.parkTimeNotice(context, carId, parkedAtMillis)
     BluetoothConnectionCenter.notifyParkedStateChanged() // redraw the banner with the result
 }
 
 /** Runs [refresh] (within the park-time budget) when the data last synced at [lastSync] is older than
  *  CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS. A failure or timeout just leaves the stored data in use. */
-private suspend fun refreshIfOlderThan(lastSync: Long?, what: String, refresh: suspend () -> Int) {
+internal suspend fun refreshIfOlderThan(lastSync: Long?, what: String, refresh: suspend () -> Int) {
     if (lastSync != null && System.currentTimeMillis() - lastSync <= CLOSURE_PARK_TIME_REFETCH_AFTER_MILLIS) return
     try {
         withTimeout(CLOSURE_PARK_TIME_FETCH_TIMEOUT_MILLIS) { refresh() }
@@ -466,7 +459,7 @@ private suspend fun refreshIfOlderThan(lastSync: Long?, what: String, refresh: s
  * The one-per-park nearby notice. Only ever called from the park-time check, which runs once per
  * park, so it needs no delivery marker: re-arms (boot, app open, syncs) never repeat it.
  */
-private suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, parkedAtMillis: Long) {
+internal suspend fun notifyNearbyClosureOnPark(context: Context, carId: Long, parkedAtMillis: Long) {
     val db = AppDatabase.getInstance(context)
     val parked = db.parkedStateDao().getForCar(carId)?.takeIf { it.parkedAtMillis == parkedAtMillis } ?: return // re-parked meanwhile
     val carName = db.carDao().getAll().firstOrNull { it.id == carId }?.name ?: "Your car"
