@@ -373,3 +373,47 @@ Clariti 838, `sftu-nd43` 155, Active Street-Use 4,206 (Street-Use approved since
   tow-away signs.
 - `sftu-nd43` has the tow feed's exact shape, including hours, but covers city agencies only.
 - Anything built on these would be an "uncertain / check signs" match at best, like the app's uncertain tow matches.
+
+---
+
+## Part B results (2026-09-25, branch `curb-sources`)
+
+### Commits
+1. Robolectric 4.17 (test-only; runs the API 37 runtime with no SDK pin, needs `--add-exports` for
+   `jdk.internal.access` on the test JVM) + `AppDatabase.replaceInstanceForTests` (never called by the app).
+2. Characterization tests against unmodified v1.04: `ArmingCharacterizationTest` (19 scenarios: every alarm,
+   notification, delivery marker and banner status) and `SoonestDeadlineTableTest`. Mutation-checked (3
+   deliberate breaks, all caught). The two stale-data scenarios were added in a follow-up commit, still on v1.04.
+3. The refactor: `CurbSources.kt` (interface, `SourceSettings`, per-source `SourceResult`, five sources in the
+   order sweep, RPP, meter, closure, tow). Characterization tests passed **without edits**. `CurbSourcesTest`
+   checks one owner per source / kind / id slot.
+4. Error isolation: per source (arm, resolve, cancel, park-time notice) and per car; a failed resolve shows
+   "can't tell", never "clear"; cancellation always rethrown. `SourceIsolationTest` (4 scenarios, corrupt rows)
+   fails on the pre-isolation code and passes after.
+
+### Deviations from the sketch
+- `arm` doesn't take `resolve`'s result: arming and the banner are separate passes needing different data
+  (tow arms on confident matches, the banner also uses uncertain ones), so each `arm` looks up what it needs.
+- `CurbContext` became `SourceSettings` (settings only): the existing functions read the clock at the moment they
+  act, and changing that is beyond a pure restructure.
+- `cancelAll` has no `clearNotifications` flag: only unpark uses it, and unpark always clears. Partial cancels
+  (RPP re-arm, a source switched off) stay inside `arm`.
+- `CarWithStatus` keeps its fields (map/widget read them), so a new source with its own banner line still
+  needs a field there.
+
+### Didn't fit cleanly
+- Sweep is the only source that changes the parked row, so `arm` returns the row for the next source (`ArmOutcome`).
+- Meter owns no alarm or id slot: its timer is cancelled directly by the unpark cleanup, per the spec.
+- RPP has no "can't tell" state: a failed RPP resolve shows no RPP line.
+
+### Remaining save-path leftover (for the follow-up spec)
+`saveParkedState` / `saveUnmanagedParkedState` (`AppDatabase.kt:127-147, 195-230, 304`) still arm sweep and RPP
+directly via `scheduleParkingReminders` / `scheduleRppForParkedCar`, with a third RPP resolver
+(`nextRppDeadline(..., from = parkedAt)`, own roll-forward fallback when the regulation is null); post the
+sweep-in-progress notice at save time; first clear the old spot's closure / tow / meter alarms; and store
+`sweepHandled || rppHandled` in `notificationScheduled`. All covered by the characterization tests.
+
+### Test and device results
+- JVM: 318 tests pass (0 skipped at a non-11 PM run); Python: 205 pass; GitHub Actions green.
+- S25, upgrade in place from v1.04 with a parked car: the alarm table after the upgrade matched the one before
+  (`scripts/alarms.py`), each reminder fired exactly once, and boot re-arm passed.
