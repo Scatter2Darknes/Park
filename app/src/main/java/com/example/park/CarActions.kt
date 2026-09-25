@@ -42,7 +42,10 @@ suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
     val settings = loadSourceSettings(context)
     return db.carDao().getAll().map { car ->
         val parked = db.parkedStateDao().getForCar(car.id)
-        val results = if (parked == null) emptyList() else CurbSources.all.map { it.resolve(context, parked, car, settings) }
+        // Each source on its own: a failing one shows "can't tell" (its `unresolved`), and the rest still show.
+        val results = if (parked == null) emptyList() else CurbSources.all.map { source ->
+            isolated("Resolving ${source.id} for car ${car.id}") { source.resolve(context, parked, car, settings) } ?: source.unresolved
+        }
         val tow = results.firstNotNullOfOrNull { it as? SourceResult.Tow }
         CarWithStatus(
             car, parked,

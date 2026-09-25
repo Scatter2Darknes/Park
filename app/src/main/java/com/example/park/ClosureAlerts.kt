@@ -436,7 +436,9 @@ private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parke
     // Re-arm the car ONCE, with whatever the refresh brought in.
     recomputeParkedSchedule(context, carId, expectedParkedAtMillis = parkedAtMillis)
     // Phase 2: the once-per-park notices, in registry order (closure, then tow).
-    for (source in CurbSources.all) source.parkTimeNotice(context, carId, parkedAtMillis)
+    for (source in CurbSources.all) {
+        isolated("Park-time notice (${source.id}) for car $carId") { source.parkTimeNotice(context, carId, parkedAtMillis) }
+    }
     BluetoothConnectionCenter.notifyParkedStateChanged() // redraw the banner with the result
 }
 

@@ -102,6 +102,9 @@ interface CurbRestrictionSource {
     suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult =
         SourceResult.None
 
+    /** What to show when [resolve] threw: "can't tell", never "clear". */
+    val unresolved: SourceResult get() = SourceResult.None
+
     /** This source's deadline for soonestDeadline(), read from an already-built status. Null: none (closures never). */
     fun deadline(status: CarWithStatus): CarDeadline? = null
 
@@ -122,6 +125,22 @@ object CurbSources {
      */
     val all: List<CurbRestrictionSource> = listOf(SweepSource, RppSource, MeterSource, ClosureSource, TowSource)
 }
+
+/**
+ * Runs [block] for one source (or one car) so that its failure can't stop the others: a corrupt row or a
+ * bug in one source must never cost the user every other reminder. Logs and returns null on failure.
+ * A CancellationException is rethrown, never swallowed: it means the coroutine was cancelled on purpose
+ * (e.g. a newer park replaced this park-time check), and swallowing it would keep running work nobody wants.
+ */
+internal inline fun <T> isolated(what: String, block: () -> T): T? =
+    try {
+        block()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("Park", "$what failed; the other curb sources are unaffected", e)
+        null
+    }
 
 // --- the sources ------------------------------------------------------------------------------------
 
@@ -245,6 +264,9 @@ object RppSource : CurbRestrictionSource {
     override suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult =
         SourceResult.Rpp(resolveRppDeadline(context, parked, car))
 
+    // RPP has no "can't tell" state of its own: a failed resolve shows no RPP line (the reminders are armed separately).
+    override val unresolved: SourceResult get() = SourceResult.Rpp(null)
+
     override fun deadline(status: CarWithStatus) = status.rppDeadline?.moveByDateTime
         ?.atZone(SF_ZONE)?.toInstant()?.toEpochMilli()
         ?.let { CarDeadline(it, DeadlineKind.RPP) }
@@ -289,14 +311,11 @@ object ClosureSource : CurbRestrictionSource {
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
     ): ArmOutcome {
-        // Independent of the other sources, and never allowed to break them.
-        try {
-            armClosureAlert(context, parked, car.name, isEnabled(settings), settings.closureLeadMillis)
-        } catch (e: Exception) {
-            Log.w("ClosureAlert", "Arming the closure alert for car ${parked.carId} failed", e)
-        }
+        armClosureAlert(context, parked, car.name, isEnabled(settings), settings.closureLeadMillis)
         return ArmOutcome(parked)
     }
+
+    override val unresolved: SourceResult get() = SourceResult.Closure(ClosureStatus.Unchecked)
 
     override suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult {
         if (!isEnabled(settings)) return SourceResult.Closure(null) // both closure features off = no closure line at all
@@ -337,14 +356,11 @@ object TowSource : CurbRestrictionSource {
     override suspend fun arm(
         context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
     ): ArmOutcome {
-        // A third deadline family, likewise never allowed to break the others.
-        try {
-            armTowReminders(context, parked, car, settings, clearStaleNotifications)
-        } catch (e: Exception) {
-            Log.w("TowAlert", "Arming the tow reminders for car ${parked.carId} failed", e)
-        }
+        armTowReminders(context, parked, car, settings, clearStaleNotifications)
         return ArmOutcome(parked)
     }
+
+    override val unresolved: SourceResult get() = SourceResult.Tow(null, TowStatus.Unchecked)
 
     override suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult {
         if (!isEnabled(settings)) return SourceResult.Tow(null, null)
@@ -368,13 +384,6 @@ object TowSource : CurbRestrictionSource {
             TowZoneRepository(context).refreshFromNetwork()
         }
 
-    override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) {
-        try {
-            notifyTowOnPark(context, carId, parkedAtMillis)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w("ClosureAlert", "park-time tow notice failed for car $carId", e)
-        }
-    }
+    override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) =
+        notifyTowOnPark(context, carId, parkedAtMillis)
 }

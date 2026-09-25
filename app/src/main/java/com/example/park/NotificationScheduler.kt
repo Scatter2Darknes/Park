@@ -465,7 +465,7 @@ fun cancelSweepReminder(context: Context, carId: Long) {
  *  CurbSources) plus the car's non-source ones. The single call site every "this car is no longer
  *  parked" path (unsubscribe, delete) needs, so nothing has to be remembered separately there. */
 fun cancelParkingReminder(context: Context, carId: Long) {
-    for (source in CurbSources.all) source.cancelAll(context, carId)
+    for (source in CurbSources.all) isolated("Cancelling ${source.id} for car $carId") { source.cancelAll(context, carId) }
     // Not curb sources, but they belong to this car's parked state too:
     // The Bluetooth "Did X just park?" / "X unparked" notices; left behind after an unpark or a car
     // delete they'd point at a spot that no longer exists. (The unpark path posts its own fresh notice
@@ -500,7 +500,11 @@ private suspend fun armParkedState(
     var parked = storedParked
     var deadlineChanged = false
     for (source in CurbSources.all) {
-        val outcome = source.arm(context, db, parked, car, settings, clearStaleNotifications)
+        // Each source on its own: one failing must never stop another from arming. A failed source
+        // passes the row on unchanged and reports "unchanged".
+        val outcome = isolated("Arming ${source.id} for car ${parked.carId}") {
+            source.arm(context, db, parked, car, settings, clearStaleNotifications)
+        } ?: continue
         parked = outcome.parked
         if (outcome.deadlineChanged) deadlineChanged = true
     }
@@ -570,7 +574,10 @@ private suspend fun armAllParkedStates(context: Context, clearStaleNotifications
     var anyDeadlineChanged = false
     db.parkedStateDao().getAll().forEach { parked ->
         val car = carsById[parked.carId] ?: return@forEach
-        if (armParkedState(context, db, parked, car, settings, clearStaleNotifications)) anyDeadlineChanged = true
+        // One car failing must not stop the cars after it from being re-armed.
+        if (isolated("Arming car ${parked.carId}") { armParkedState(context, db, parked, car, settings, clearStaleNotifications) } == true) {
+            anyDeadlineChanged = true
+        }
     }
     // The widget shows the stored deadline, so it has to be redrawn when one moved.
     if (anyDeadlineChanged) enqueueWidgetRefresh(context)
