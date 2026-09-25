@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 /**
  * Proves the Robolectric setup works before the characterization tests rely on it: the app's real Room
@@ -24,6 +25,9 @@ import org.robolectric.Shadows.shadowOf
  * Android framework classes (normally stubs that throw on the JVM) from a real Android build.
  */
 @RunWith(RobolectricTestRunner::class)
+// A plain Application, not ParkApp: ParkApp.onCreate inserts a default car in the background, which could
+// land in this test's empty database (it did, intermittently).
+@Config(application = android.app.Application::class)
 class RobolectricSmokeTest {
     private lateinit var context: Context
 
