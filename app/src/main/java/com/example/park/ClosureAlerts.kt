@@ -423,7 +423,8 @@ private suspend fun runParkTimeClosureCheck(context: Context, carId: Long, parke
     // Both closure features off: nothing to do, exactly as before closures existed (the re-arm the
     // save already ran has cancelled any closure alert). Park-time check off but Tier 2 on: no
     // fetch here, but still re-arm and notify from the background-synced data.
-    // Tow zones share these switches (SettingsRepository.towEnabled), so this check covers both.
+    // Tow zones need one of these switches too (SettingsRepository.towEnabled), so this check covers both;
+    // tow's own switch is checked by TowSource's refresh and notice.
     if (!settings.closuresEnabled()) return
     val fetchAllowed = settings.closureParkTimeCheck.first()
     if (fetchAllowed) {

@@ -35,8 +35,10 @@ class ClosureSyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             // Tow zones ride on the same Tier 2 job (spec §4: the worker can be shared). Its own
             // try, so a tow-feed failure never undoes a good closure sync.
             try {
-                val towCount = TowZoneRepository(applicationContext).refreshFromNetwork()
-                android.util.Log.d("TowSync", "Background tow sync complete: $towCount zones")
+                if (SettingsRepository(applicationContext).towChecksEnabled.first()) { // tow can be off on its own
+                    val towCount = TowZoneRepository(applicationContext).refreshFromNetwork()
+                    android.util.Log.d("TowSync", "Background tow sync complete: $towCount zones")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

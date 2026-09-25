@@ -350,7 +350,7 @@ object TowSource : CurbRestrictionSource {
         NotificationIds.Purpose.TOW_ACTIVE, NotificationIds.Purpose.TOW_NEARBY, NotificationIds.Purpose.ROLL_FORWARD_TOW
     )
 
-    /** No switch of its own: the spec gives tow zones and closures one pair of switches (SettingsRepository.towEnabled). */
+    /** Its own switch, plus one of the closure switches that fetch the data (SettingsRepository.towEnabled). */
     override fun isEnabled(settings: SourceSettings) = settings.towEnabled
 
     override suspend fun arm(
@@ -379,11 +379,17 @@ object TowSource : CurbRestrictionSource {
 
     override fun cancelAll(context: Context, carId: Long) = cancelTowReminder(context, carId)
 
-    override suspend fun refreshForPark(context: Context) =
-        refreshIfOlderThan(SettingsRepository(context).towLastSyncMillis.first(), "tow-zone") {
+    // The park-time step runs whenever a closure switch is on; tow can be off within that, so both check.
+    override suspend fun refreshForPark(context: Context) {
+        val settings = SettingsRepository(context)
+        if (!settings.towEnabled()) return
+        refreshIfOlderThan(settings.towLastSyncMillis.first(), "tow-zone") {
             TowZoneRepository(context).refreshFromNetwork()
         }
+    }
 
-    override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) =
+    override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) {
+        if (!SettingsRepository(context).towEnabled()) return
         notifyTowOnPark(context, carId, parkedAtMillis)
+    }
 }

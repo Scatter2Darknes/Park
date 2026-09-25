@@ -48,6 +48,7 @@ object SettingsKeys {
     val NOTIFICATION_PERMISSION_ASKED = booleanPreferencesKey("notification_permission_asked")
     val TOW_LAST_SYNC_MILLIS = longPreferencesKey("tow_last_sync_millis")
     val TOW_NEWEST_ENTRY_MILLIS = longPreferencesKey("tow_newest_entry_millis")
+    val TOW_CHECKS_ENABLED = booleanPreferencesKey("tow_checks_enabled")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
     val DRIVING_MODE_AUTO_CENTER = booleanPreferencesKey("driving_mode_auto_center")
     val DRIVING_MODE_AUTO_ZOOM = booleanPreferencesKey("driving_mode_auto_zoom")
@@ -143,6 +144,9 @@ object SettingsDefaults {
     const val CLOSURE_PARK_TIME_CHECK = true
     const val CLOSURE_BACKGROUND_SYNC = false
     const val CLOSURE_ALERT_LEAD_HOURS = 48
+    // Tow zones: on by default, as before this switch existed. Still needs one of the two closure
+    // switches on, because those are what fetch the city's data.
+    const val TOW_CHECKS_ENABLED = true
 }
 
 /** Choices for how far ahead a street-closure alert goes out, in hours. */
@@ -581,12 +585,21 @@ class SettingsRepository(private val context: Context) {
     /** Whether any closure feature is on. Both off = the app behaves as it did before closures. */
     suspend fun closuresEnabled(): Boolean = closureParkTimeCheck.first() || closureBackgroundSync.first()
 
+    /** The user's own tow-zone switch ("Tow-away zone reminders"). See [towEnabled] for what else it needs. */
+    val towChecksEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.TOW_CHECKS_ENABLED] ?: SettingsDefaults.TOW_CHECKS_ENABLED
+    }
+
+    suspend fun setTowChecksEnabled(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.TOW_CHECKS_ENABLED] = value }
+    }
+
     /**
-     * Whether tow-zone checks run. The spec (§5) gives tow zones and closures ONE park-time switch and
-     * ONE Tier 2 switch, so this is the same pair as [closuresEnabled]. Both off = no tow fetch, no tow
-     * alarms, no tow banner line.
+     * Whether tow-zone checks run: the tow switch is on AND one of the two closure switches is, because the
+     * park-time check and the background job are what fetch the city's data for both (spec §5). Off = no tow
+     * fetch, no tow alarms, no tow notices, no tow banner line. Closures can stay on with tow off.
      */
-    suspend fun towEnabled(): Boolean = closuresEnabled()
+    suspend fun towEnabled(): Boolean = closuresEnabled() && towChecksEnabled.first()
 
     /**
      * Whether Park has ever put up Android's notification-permission dialog (or the explanation before it).

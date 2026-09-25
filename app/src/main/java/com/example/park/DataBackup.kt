@@ -84,6 +84,7 @@ suspend fun exportBackupJson(context: Context): String {
         put("closureParkTimeCheck", settings.closureParkTimeCheck.first())
         put("closureBackgroundSync", settings.closureBackgroundSync.first())
         put("closureAlertLeadHours", settings.closureAlertLeadHours.first())
+        put("towChecksEnabled", settings.towChecksEnabled.first())
         put("showClosuresLayer", settings.showClosuresLayer.first())
     }
 
@@ -193,8 +194,10 @@ suspend fun importBackupJson(context: Context, json: String): Result<Int> = runC
         if (s.has("closureBackgroundSync")) settings.setClosureBackgroundSync(s.getBoolean("closureBackgroundSync"))
         if (s.has("closureAlertLeadHours")) settings.setClosureAlertLeadHours(s.getInt("closureAlertLeadHours"))
         if (s.has("showClosuresLayer")) settings.setShowClosuresLayer(s.getBoolean("showClosuresLayer"))
-        // The background closure job and every parked car's closure alert follow these settings.
-        if (s.has("closureBackgroundSync") || s.has("closureParkTimeCheck") || s.has("closureAlertLeadHours")) {
+        // Older backups don't have it: tow stays on, as it was before the switch existed.
+        if (s.has("towChecksEnabled")) settings.setTowChecksEnabled(s.getBoolean("towChecksEnabled"))
+        // The background closure job and every parked car's closure and tow alerts follow these settings.
+        if (s.has("closureBackgroundSync") || s.has("closureParkTimeCheck") || s.has("closureAlertLeadHours") || s.has("towChecksEnabled")) {
             applyClosureSyncSchedule(context, androidx.work.ExistingPeriodicWorkPolicy.REPLACE)
             rescheduleAllActiveReminders(context)
         }

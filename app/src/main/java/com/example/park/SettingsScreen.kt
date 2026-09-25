@@ -145,6 +145,7 @@ fun SettingsScreen(
     var closureParkTimeCheck by remember { mutableStateOf(SettingsDefaults.CLOSURE_PARK_TIME_CHECK) }
     var closureBackgroundSync by remember { mutableStateOf(SettingsDefaults.CLOSURE_BACKGROUND_SYNC) }
     var closureAlertLeadHours by remember { mutableStateOf(SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS) }
+    var towChecksEnabled by remember { mutableStateOf(SettingsDefaults.TOW_CHECKS_ENABLED) }
     var closureLeadMenuExpanded by remember { mutableStateOf(false) }
     var closuresLastSyncMillis by remember { mutableStateOf<Long?>(null) }
     var towLastSyncMillis by remember { mutableStateOf<Long?>(null) }
@@ -188,6 +189,7 @@ fun SettingsScreen(
         closureParkTimeCheck = settings.closureParkTimeCheck.first()
         closureBackgroundSync = settings.closureBackgroundSync.first()
         closureAlertLeadHours = settings.closureAlertLeadHours.first()
+        towChecksEnabled = settings.towChecksEnabled.first()
         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
         towLastSyncMillis = settings.towLastSyncMillis.first()
         towNewestEntryMillis = settings.towNewestEntryMillis.first()
@@ -1243,7 +1245,8 @@ fun SettingsScreen(
                     "whole city's lists and matches them on your phone, so your location is never " +
                     "sent anywhere. A closure is not a ticket risk: it can only mean you may not be " +
                     "able to drive out for a while. A tow zone is: your car gets reminders like a " +
-                    "sweep, plus a heads-up at the lead time below. Both switches below cover both."
+                    "sweep, plus a heads-up at the lead time below. The two checking switches below " +
+                    "cover both; tow-zone reminders can also be turned off on their own."
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1305,6 +1308,38 @@ fun SettingsScreen(
                 }
             )
         }
+        // Tow zones on their own switch. Greyed out while both checks above are off: those fetch the data.
+        DependentSetting(
+            enabled = closureParkTimeCheck || closureBackgroundSync,
+            needs = "one of the two switches above on"
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Tow-away zone reminders")
+                    Text(
+                        if (towChecksEnabled) "Reminders, a heads-up and a banner line when a tow zone is on your block."
+                        else "Off: no tow-zone reminders, notices or banner line, and no tow data downloaded. " +
+                            "Closures are still checked.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = towChecksEnabled,
+                    enabled = closureParkTimeCheck || closureBackgroundSync,
+                    onCheckedChange = { checked ->
+                        towChecksEnabled = checked
+                        scope.launch {
+                            settings.setTowChecksEnabled(checked)
+                            rescheduleAllActiveReminders(context) // off: drops every tow alarm and notice
+                        }
+                    }
+                )
+            }
+        }
         Spacer(Modifier.height(4.dp))
         val closuresCheckedText = closuresLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
         Text("Closures last checked: $closuresCheckedText", style = MaterialTheme.typography.bodySmall)
@@ -1312,7 +1347,7 @@ fun SettingsScreen(
         Text("Tow zones last checked: $towCheckedText", style = MaterialTheme.typography.bodySmall)
         // The city's tow feed stopped getting new permits in July 2026. Say so here too, not only in
         // the banner, so "last checked: 2 hours ago" can't be read as "the data is current".
-        if (towLastSyncMillis != null && towFeedIsStale(towNewestEntryMillis, System.currentTimeMillis())) {
+        if (towChecksEnabled && towLastSyncMillis != null && towFeedIsStale(towNewestEntryMillis, System.currentTimeMillis())) {
             val newest = towNewestEntryMillis?.let {
                 java.time.Instant.ofEpochMilli(it).atZone(SF_ZONE).format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
             }
@@ -1340,7 +1375,7 @@ fun SettingsScreen(
                         } catch (e: Exception) {
                             "closures failed (${e.message})"
                         }
-                        val towResult = try {
+                        val towResult = if (!towChecksEnabled) "tow zones off" else try {
                             "${TowZoneRepository(context).refreshFromNetwork()} tow zones"
                         } catch (e: Exception) {
                             "tow zones failed (${e.message})"
