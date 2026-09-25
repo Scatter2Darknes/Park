@@ -260,3 +260,116 @@ the reminders fire once each (no orphans, no duplicates).
   enough to spec the follow-up pass.
 - Anything that didn't fit the interface cleanly (these are the interesting findings).
 - Test and device results, including the in-place upgrade check.
+
+---
+
+## Part A findings (2026-09-24)
+
+Run: `python scripts\pw_permit_check.py` on 2026-09-24 (no app token in the worktree, so unauthenticated; paced
+1 s between requests). `--save-dir` keeps the raw downloads for offline re-runs (`--from-dir`).
+
+### Verdict: **CLARITI_HAS_NEW_PERMITS** (`fxfq-npa9`, `sftu-nd43`, `b6tj-gt35`)
+
+Sign-posting permits kept being entered after 2026-07-20 in every Public Works dataset, at an unchanged rate.
+But the hypothesis behind the question is **wrong in its mechanism**: the permits did not move to Clariti and
+leave the tow feed behind. The tow feed never carried Clariti permits, and the old street-use system it drew from
+is still issuing them at full rate. The break is on SFMTA's side (the tow feed's own export), not a Public Works
+migration.
+
+| Dataset | Sign-posting, issued | Entered after 07-20 | Per week |
+|---|---|---|---|
+| `fxfq-npa9` Clariti | 6,017 (since 2026-01-28) | 1,259 (Street Space 962, Temporary Occupancy 297) | ~134 |
+| `sftu-nd43` Parking Signs | 191 (the whole dataset) | 178 (177 City Agency, 1 Private) | ~19 |
+| `b6tj-gt35` Street-Use (approved since May) | 10,450 | 4,463 (Excavation 2,346, TempOccup 1,988, ExcStreet 116, AddlStSpac 12) | ~473 |
+| `x8nh-xzn6` Active Street-Use (snapshot) | 4,551 | 2,086 | (snapshot; not a rate) |
+| `6r5h-j298` tow feed (reference) | 2,240 since May | **0** | 0 |
+
+### Which tow permits came from where
+- Of the tow feed's 2,240 May–Jul rows, 814 have **no permit number** (sources: Verbal 1,299 / Web 941 overall).
+- The 382 distinct permit numbers: **273 old-system Excavation (`..EXC-`)**, 6 `E`, 6 `TE`, 3 `IE`, 94 other shapes
+  (`26-0974`, `26SF168`: in no Public Works dataset).
+- Found by number: **288 in `b6tj-gt35`**, 33 in `x8nh-xzn6`, **0 in Clariti**, 0 in `sftu-nd43`; 94 nowhere.
+- **No `TOC` (temporary occupancy) permit appears in the tow feed at all**, and no Clariti number (`TOC-26-…`,
+  `SSP-26-…`) ever did, although Clariti has issued ~170 sign-posting permits a week since January. So even while it
+  worked, the tow feed missed Clariti's street-space / temporary-occupancy permits.
+- Clariti has 1,153 permits in a workflow phase literally named **"Tow Sign Photo"**: its permits do post tow-away signs.
+
+### Live tow zones (step 6)
+7 rows end today or later. **None has a permit number** (6 are "Verbal" entries from 2026-07-10, 1 is a 2017 row
+with a 2043–2046 window, clearly junk). By CNN + overlapping window: 5 match an old-system street-use permit, 2 match
+nothing. Matching by number, as the spec asked, was impossible for the live set; the May–Jul history above is the
+meaningful cross-check.
+
+### Weekly entry histogram (sign-posting types, Monday weeks)
+```
+week         clariti  signs  street_use  tow
+2026-05-04       172      0         537  362
+2026-06-01       168      0         489  215
+2026-07-06       196      0         699  177
+2026-07-13       214      1         517  167
+2026-07-20       161      0         635   32   <- tow feed stops
+2026-07-27       187      0         709    0
+2026-08-10       173      0         711    0
+2026-08-31       102     47         539    0
+2026-09-14        99     92         441    0
+```
+(Excerpt; the script prints every week. The last week is partial. `sftu-nd43` only fills from mid-August: it holds
+current and upcoming signs, not history.)
+
+### Lead time (window start − entry, permits entered since 2026-06-01)
+| Dataset | n | Median | p10 | p90 | Under 2 days |
+|---|---|---|---|---|---|
+| Clariti | 2,542 | 5.0 d | 2.0 | 13.0 | 7% |
+| `sftu-nd43` | 179 | 4.4 d | 2.6 | 12.7 | 5% |
+| Street-Use | 8,259 | 5.7 d | 2.8 | 20.4 | 6% |
+| Tow feed (May–Jul) | 2,240 | 4.2 d | 2.3 | 12.3 | 4% |
+
+Consistent with the ~4-day median in closures spec §9. The app's 2-day lead time would catch 93–96% of them.
+Street-Use has 1,111 permits whose window starts *before* approval (renewals / back-dated), excluded from the stats.
+
+### Next 7 days, citywide
+Clariti 838, `sftu-nd43` 155, Active Street-Use 4,206 (Street-Use approved since May: 2,661). The tow feed has 7.
+
+### Columns chosen, and how far to trust them
+| Dataset | Type | Entry | Window | Location | Status |
+|---|---|---|---|---|---|
+| Clariti | `permit_type` | `issue_date` | `permit_start_date` → `permit_end_date` | `cnn` (text) | `status` (+ `phase`) |
+| `sftu-nd43` | `category` | `datetimeentered` | `startdate` → `enddate` (+ `starttime`/`endtime`, `notes`) | `cnn` | none |
+| Street-Use / Active | `permit_type` | `approved_date` | `permit_start_date` → `permit_end_date` | `cnn` | `status` |
+
+- **Clariti stores every date as text, and dates only** (`2026-09-14`): no time of day for the window, so a
+  source built on it can't know enforcement hours. All values parsed. It has no `datetimeentered`; `issue_date` is
+  the closest thing, and is blank for permits not issued yet.
+- **Street-Use has no entry date**: `approved_date` stands in. Its `permit_start_date` carries a time
+  (`07:00`) on some rows and midnight on others.
+- **`sftu-nd43` has exactly the tow feed's schema** (`datetimeentered`, `permitnumber`, `startdate`, `notes`,
+  `_24hourenforcement`, `signid`...): it looks like the same SFMTA sign system, but its category is almost only
+  "Construction - City Agency" and it's small. Its dates are `MM/DD/YYYY` text.
+- No DST check was possible: none of these have a `*_utc` twin column to compare with.
+
+### Statuses actually present (the "description can be wrong" check)
+- Clariti: Expired 5,541, Awaiting Applicant Info 1,299, Active 789, Pending 223, Void 207, Completed 78, …
+  Counted as issued: everything except Void / Withdrawn / Cancelled / Pending / Pending Review /
+  Awaiting Applicant Info / blank.
+- Street-Use since May: APPROVED 6,474, CLOSED 4,224, EXPIRED 2,491, RENEWED 2,463, ACTIVE 538, ELEMENT 91, …
+  Excluded: VOID, WITHDRAW, CANCELLED, APPLCNT, PLANCHK, ONHOLD.
+- The "Active" view `x8nh-xzn6` does hold only APPROVED / ACTIVE, but includes permits approved as far back as
+  2000 (Wireless, Excavation): "active" there doesn't mean "short-notice".
+
+### Permit types counted
+- Clariti: **Street Space, Temporary Occupancy** counted; Sidewalk Repair (520) and Inspection ROW conformity (149) not.
+- Street-Use: **TempOccup, Excavation, ExcStreet, StreetSpace, AddlStSpac** counted (Excavation because the tow
+  feed's own permits are excavation permits). Not counted: Banners, Emergency, NightNoise, StorCont, StrtImprov,
+  MinorEnc, Parklet, TableChair, Wireless, FoodFac and the rest.
+- `sftu-nd43`: every row (it is a signs dataset).
+
+### What this means for Park (owner's decision, not acted on)
+- A source for short-notice no-parking signs is **available**, but none of these is a drop-in replacement for the
+  tow feed: Clariti and Street-Use have **no enforcement hours or days** (the tow feed's `starttime`/`endtime`/
+  `notes`), only date windows, and don't say whether signs are tow-away or just no-parking.
+- Street-Use (old system) carries the permit types the tow feed was fed from, at a larger volume (it isn't
+  filtered to permits that actually posted tow signs).
+- Clariti covers permits the tow feed **never** had, and its "Tow Sign Photo" phase is a hint that a permit posts
+  tow-away signs.
+- `sftu-nd43` has the tow feed's exact shape, including hours, but covers city agencies only.
+- Anything built on these would be an "uncertain / check signs" match at best, like the app's uncertain tow matches.

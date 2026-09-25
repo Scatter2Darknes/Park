@@ -11,6 +11,7 @@ Small Python 3 scripts (standard library only - nothing to install) that replace
 | `debug_hooks.py` (A6) | parks / unparks / re-arms / dumps state via the debug-only receiver | yes (emulator only), except `dump` |
 | `check_release_manifest.py` (A6) | proves a release APK contains no debug receiver | no |
 | `overlap_check.py` | how often SFMTA street closures and tow zones overlap (closures spec §4) | no device at all |
+| `pw_permit_check.py` | do Public Works datasets carry the permits the tow feed stopped getting (refactor spec Part A) | no device at all |
 | `common.py` (A1) | shared helpers (not run directly) | - |
 
 ## Safety rules (the scripts and their tests enforce these)
@@ -32,6 +33,12 @@ Small Python 3 scripts (standard library only - nothing to install) that replace
 ```
 python scripts\overlap_check.py            # the verdict, once the tow feed is current again
 python scripts\overlap_check.py --force    # numbers now, as a floor
+```
+
+**`pw_permit_check.py`** - Part A of `docs/park-sources-refactor-spec.md`: reads four Public Works permit datasets (Clariti `fxfq-npa9`, parking signs `sftu-nd43`, street-use `b6tj-gt35` and its active view `x8nh-xzn6`) plus the tow feed, citywide, and reports which columns it used, a weekly histogram of sign-posting permits entered since May, lead times, how many cover the next 7 days, where the tow feed's permits can be found by number (or by block and window), and a verdict. No phone or emulator. `--save-dir` / `--from-dir` as in `overlap_check.py`; `--describe` and `--survey` print the raw columns and type/status counts. Findings are in the spec.
+
+```
+python scripts\pw_permit_check.py
 ```
 
 **`backup_db.py`** (A2) - copies `databases/park_database` (+ `-wal`, `-shm`) and `files/datastore/*.preferences_pb` to `backups/<yyyy-MM-dd_HHmmss>/` and verifies them.
