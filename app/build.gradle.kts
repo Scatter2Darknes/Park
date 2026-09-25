@@ -105,6 +105,9 @@ dependencies {
     // with simulated ("shadow") system services a test can inspect. Test-only: never in the APK.
     // Used by the reminder-arming characterization tests (docs/park-sources-refactor-spec.md, Part B).
     testImplementation(libs.robolectric)
+    // Lets Robolectric tests call code that enqueues WorkManager jobs (widget refreshes) without a real
+    // WorkManager. Same version as work-runtime-ktx. Test-only.
+    testImplementation("androidx.work:work-testing:2.9.0")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
