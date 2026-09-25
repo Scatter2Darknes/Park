@@ -104,25 +104,36 @@ suspend fun exportBackupJson(context: Context): String {
  * duplicates rather than silently deleting anything). Settings values are applied directly
  * since those are singletons, not a list, so "import" and "overwrite" mean the same thing
  * for them.
+ *
+ * One exception to "just adds": a Bluetooth device can be linked to only ONE car (auto-park looks the car
+ * up by device address and would otherwise pick one arbitrarily). An imported car whose device is already
+ * linked (to an existing car, or to a car earlier in the same import) arrives unlinked; the existing link
+ * wins, so an import never changes what's already on the phone.
+ *
+ * @return how many imported cars arrived without their Bluetooth link for that reason.
  */
-suspend fun importBackupJson(context: Context, json: String): Result<Unit> = runCatching {
+suspend fun importBackupJson(context: Context, json: String): Result<Int> = runCatching {
     val root = JSONObject(json)
     val db = AppDatabase.getInstance(context)
     val settings = SettingsRepository(context)
+    var skippedLinks = 0
 
     root.optJSONArray("cars")?.let { carsJson ->
-        for (i in 0 until carsJson.length()) {
+        val imported = (0 until carsJson.length()).map { i ->
             val c = carsJson.getJSONObject(i)
-            db.carDao().insert(
-                Car(
-                    name = c.getString("name"),
-                    isDefault = c.optBoolean("isDefault", false),
-                    bluetoothDeviceAddress = c.optStringOrNull("bluetoothDeviceAddress"),
-                    colorHex = c.optStringOrNull("colorHex"),
-                    iconEmoji = c.optStringOrNull("iconEmoji")
-                )
+            Car(
+                name = c.getString("name"),
+                isDefault = c.optBoolean("isDefault", false),
+                bluetoothDeviceAddress = c.optStringOrNull("bluetoothDeviceAddress"),
+                colorHex = c.optStringOrNull("colorHex"),
+                iconEmoji = c.optStringOrNull("iconEmoji")
             )
         }
+        val deduped = withoutTakenBluetoothLinks(db.carDao().getAll(), imported)
+        skippedLinks = imported.zip(deduped).count { (before, after) -> before.bluetoothDeviceAddress != after.bluetoothDeviceAddress }
+        deduped.forEach { db.carDao().insert(it) }
+        // A newly linked device may be connected right now (display only: an imported car isn't parked).
+        refreshBluetoothLinks(context, runMissedConnect = false)
     }
 
     root.optJSONArray("savedLocations")?.let { locationsJson ->
@@ -200,5 +211,19 @@ suspend fun importBackupJson(context: Context, json: String): Result<Unit> = run
                 )
             )
         }
+    }
+    skippedLinks
+}
+
+/**
+ * [imported] with each Bluetooth link that's already taken removed: taken by one of [existing], or by a car
+ * earlier in [imported]. Addresses compare case-insensitively, as everywhere else they're matched.
+ */
+internal fun withoutTakenBluetoothLinks(existing: List<Car>, imported: List<Car>): List<Car> {
+    val taken = existing.mapNotNull { it.bluetoothDeviceAddress?.uppercase() }.toMutableSet()
+    return imported.map { car ->
+        val address = car.bluetoothDeviceAddress ?: return@map car
+        // Set.add returns false when the address was already in the set: a clash.
+        if (taken.add(address.uppercase())) car else car.copy(bluetoothDeviceAddress = null)
     }
 }

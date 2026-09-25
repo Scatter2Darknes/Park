@@ -255,7 +255,12 @@ fun SettingsScreen(
                         "Could not read the selected file."
                     } else {
                         importBackupJson(context, json).fold(
-                            onSuccess = { reloadAllSettings(); "Backup imported." },
+                            onSuccess = { skippedLinks ->
+                                reloadAllSettings()
+                                if (skippedLinks == 0) "Backup imported."
+                                else "Backup imported. $skippedLinks car(s) came in without their Bluetooth link: " +
+                                    "that device is already linked to another car here."
+                            },
                             onFailure = { e -> "Import failed: ${e.message}" }
                         )
                     }
