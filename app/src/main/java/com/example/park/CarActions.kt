@@ -32,6 +32,12 @@ data class CarDeadline(val millis: Long, val kind: DeadlineKind)
  * (the map's priority banner, the widget), so none of them silently ignore a deadline that's more
  * urgent than (or the only) one sweep data alone would show. A tie goes to the earlier source in
  * CurbSources.all.
+ *
+ * A deadline that has already PASSED still counts, on purpose: it means overdue, and the banner shows it
+ * as "Now" (formatCountdown). The case that matters is RPP: a car still parked past its non-permit limit
+ * keeps that passed move-by time for as long as the enforcement window is open, and must rank as the most
+ * urgent thing on the screen, not drop out of it. (Sweep and meter are only briefly past, until the
+ * roll-forward or the meter alarm clears them.)
  */
 fun CarWithStatus.soonestDeadline(): CarDeadline? =
     CurbSources.all.mapNotNull { it.deadline(this) }.minByOrNull { it.millis }
