@@ -48,6 +48,21 @@ android {
         // database at an OLD version — without this the androidTest can't find them.
         getByName("androidTest").assets.directories.add("$projectDir/schemas")
     }
+    testOptions {
+        // Robolectric (JVM tests that simulate Android, see below) needs the merged resources and
+        // manifest, e.g. to build notifications against the app's real channels and icons.
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric's Android 17 (API 37) runtime reaches into JDK internals (FileDescriptor via
+        // jdk.internal.access) while setting up each test; recent JDKs block that unless it is
+        // exported explicitly. Affects only the unit-test JVM, never the app.
+        unitTests.all {
+            it.jvmArgs(
+                "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                "--add-opens=java.base/java.io=ALL-UNNAMED",
+                "--enable-native-access=ALL-UNNAMED"
+            )
+        }
+    }
     buildFeatures {
         compose = true
         // Required for BuildConfig.VERSION_NAME/VERSION_CODE (used in SettingsScreen's
@@ -86,6 +101,10 @@ dependencies {
     // Android's own org.json classes are stubs that throw on the JVM, so unit tests of code that
     // parses JSON (RppDataApiTest) need the real library. Test-only; the app uses the platform's.
     testImplementation("org.json:json:20260814")
+    // Robolectric runs Android code (Room, AlarmManager, NotificationManager) inside plain JVM tests,
+    // with simulated ("shadow") system services a test can inspect. Test-only: never in the APK.
+    // Used by the reminder-arming characterization tests (docs/park-sources-refactor-spec.md, Part B).
+    testImplementation(libs.robolectric)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

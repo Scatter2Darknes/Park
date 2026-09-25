@@ -50,6 +50,19 @@ abstract class AppDatabase : RoomDatabase() {
                     .build().also { INSTANCE = it }
             }
         }
+
+        /**
+         * Tests only: makes [getInstance] return [db] (typically an in-memory database), or forget the
+         * current instance when [db] is null, so each Robolectric test starts from an empty database.
+         * Never called by the app, so runtime behavior is unchanged.
+         */
+        @androidx.annotation.VisibleForTesting
+        internal fun replaceInstanceForTests(db: AppDatabase?) {
+            synchronized(this) {
+                INSTANCE?.takeIf { it !== db }?.close()
+                INSTANCE = db
+            }
+        }
     }
 }
 
