@@ -1350,7 +1350,8 @@ fun MapScreen(
                                     .minByOrNull { it.third }
                                     ?.let { (c, line, _) ->
                                         Text(
-                                            if (c.car.id == mostUrgent.car.id) line else "${c.car.name}: $line",
+                                            // A line about the city's data isn't about one car: no name on it.
+                                            if (c.car.id == mostUrgent.car.id || closureLineIsFeedWide(c.closureStatus)) line else "${c.car.name}: $line",
                                             style = MaterialTheme.typography.bodySmall,
                                             modifier = Modifier
                                                 .padding(top = 4.dp)
@@ -1365,7 +1366,7 @@ fun MapScreen(
                                     .minByOrNull { it.third }
                                     ?.let { (c, line, _) ->
                                         Text(
-                                            if (c.car.id == mostUrgent.car.id) line else "${c.car.name}: $line",
+                                            if (c.car.id == mostUrgent.car.id || towLineIsFeedWide(c.towStatus)) line else "${c.car.name}: $line",
                                             style = MaterialTheme.typography.bodySmall,
                                             modifier = Modifier.padding(top = 4.dp)
                                         )
@@ -1421,19 +1422,22 @@ fun MapScreen(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(item.car.name, style = MaterialTheme.typography.bodyMedium)
                                             Text(itemNextText, style = MaterialTheme.typography.bodySmall, color = itemTextColor)
-                                            closureBannerText(item.closureStatus, now)?.let {
-                                                Text(
-                                                    it,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    modifier = Modifier.clickable {
-                                                        centerMapOnClosure(item.closureStatus)
-                                                        parkedBannerExpanded = false
-                                                    }
-                                                )
-                                            }
-                                            towBannerText(item.towStatus, now)?.let {
-                                                Text(it, style = MaterialTheme.typography.bodySmall)
-                                            }
+                                            // Lines about the city's data are shown once below the list, not per car.
+                                            closureBannerText(item.closureStatus, now)
+                                                ?.takeUnless { closureLineIsFeedWide(item.closureStatus) }
+                                                ?.let {
+                                                    Text(
+                                                        it,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        modifier = Modifier.clickable {
+                                                            centerMapOnClosure(item.closureStatus)
+                                                            parkedBannerExpanded = false
+                                                        }
+                                                    )
+                                                }
+                                            towBannerText(item.towStatus, now)
+                                                ?.takeUnless { towLineIsFeedWide(item.towStatus) }
+                                                ?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                                         }
                                         Text(
                                             itemCountdown,
@@ -1453,6 +1457,15 @@ fun MapScreen(
                                             }) { Text("+ time") }
                                         }
                                     }
+                                }
+                                // The city-data lines, once for all cars (see BannerLines.kt).
+                                feedWideBannerLines(activeParkedCars, now).forEach { line ->
+                                    Text(
+                                        line,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
                                 }
                             }
                         }
