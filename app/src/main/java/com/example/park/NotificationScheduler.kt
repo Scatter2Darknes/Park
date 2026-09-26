@@ -23,6 +23,7 @@ private fun ReminderKind.idPurpose(): NotificationIds.Purpose = when (this) {
     ReminderKind.TOW_URGENT -> NotificationIds.Purpose.TOW_URGENT
     ReminderKind.TOW_ADVANCE -> NotificationIds.Purpose.TOW_ADVANCE
     ReminderKind.TOW_ACTIVE -> NotificationIds.Purpose.TOW_ACTIVE
+    ReminderKind.PERMIT_ADVANCE -> NotificationIds.Purpose.PERMIT_ADVANCE
 }
 
 fun reminderRequestCode(carId: Long, kind: ReminderKind): Int = NotificationIds.forCar(carId, kind.idPurpose())
@@ -149,6 +150,7 @@ suspend fun recordReminderDelivery(
         ReminderKind.TOW_URGENT -> dao.markTowUrgentDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.TOW_ADVANCE -> dao.markTowAdvanceDelivered(carId, parkedAtMillis, deadlineMillis)
         ReminderKind.TOW_ACTIVE -> Unit // one-off notice, like SWEEP_ACTIVE
+        ReminderKind.PERMIT_ADVANCE -> dao.markPermitAdvanceDelivered(carId, parkedAtMillis, deadlineMillis)
     }
 }
 
@@ -171,7 +173,7 @@ suspend fun recordReminderDelivery(
  *   the reminder fired right now, or it had already been delivered. False when nothing was set
  *   and nothing fired (the deadline already passed, or the notification couldn't be posted).
  */
-private suspend fun scheduleOrFireImmediately(
+internal suspend fun scheduleOrFireImmediately(
     context: Context,
     carId: Long,
     carName: String,

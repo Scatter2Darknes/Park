@@ -73,7 +73,11 @@ object NotificationIds {
         /** The one-per-park "tow-away zone nearby — check signs" notice for an uncertain match. */
         TOW_NEARBY(17 * SPAN),
         /** Request code only: advances a parked car past a tow window. */
-        ROLL_FORWARD_TOW(18 * SPAN)
+        ROLL_FORWARD_TOW(18 * SPAN),
+        /** Heads-up for a temporary no-parking permit on the car's block, at the lead time (see PermitAlerts.kt). */
+        PERMIT_ADVANCE(19 * SPAN),
+        /** The one-per-park "no-parking permit in effect on your block — check signs" notice. */
+        PERMIT_NOTICE(20 * SPAN)
     }
 
     /**

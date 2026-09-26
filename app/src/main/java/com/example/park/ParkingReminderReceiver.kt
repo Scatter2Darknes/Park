@@ -52,6 +52,11 @@ fun buildReminderContent(
                         ". Move your car before then, or it may be towed.")
         ReminderKind.TOW_ACTIVE -> "Tow-away zone in effect \u2014 move $carName now" to
                 ("A temporary tow-away zone on $corridor is in effect" + (timeText?.let { " until $it" } ?: ""))
+        // A Public Works permit has no reliable hours and may not cover the car's spot: "check the signs",
+        // never "move or be towed". corridor is the permit's place label, nextSweepAtMillis its start.
+        ReminderKind.PERMIT_ADVANCE -> "$carName: no-parking permit on your block" to
+                ("A temporary no-parking permit on $corridor starts" + (timeText?.let { " $it" } ?: " soon") +
+                        ". Check the signs near your car; if they cover your spot, move before then.")
     }
 }
 

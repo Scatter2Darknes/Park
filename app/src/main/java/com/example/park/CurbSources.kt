@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.first
  */
 
 /** One per source. The registry order below, not this enum's, is what the loops follow. */
-enum class SourceId { SWEEP, RPP, METER, CLOSURE, TOW }
+enum class SourceId { SWEEP, RPP, METER, CLOSURE, TOW, PERMIT }
 
 /** The settings the sources read, loaded ONCE per pass (one arm pass, or one status pass) and handed to each. */
 class SourceSettings(
@@ -33,7 +33,8 @@ class SourceSettings(
     /** How far ahead closure alerts and the tow advance alert go out (Settings: closureAlertLeadHours). */
     val closureLeadMillis: Long,
     val towEnabled: Boolean,
-    val closuresLastSyncMillis: Long?
+    val closuresLastSyncMillis: Long?,
+    val permitsEnabled: Boolean
 )
 
 suspend fun loadSourceSettings(context: Context): SourceSettings {
@@ -47,7 +48,8 @@ suspend fun loadSourceSettings(context: Context): SourceSettings {
         closuresEnabled = settingsRepo.closuresEnabled(),
         closureLeadMillis = closureLeadMillis(context),
         towEnabled = settingsRepo.towEnabled(),
-        closuresLastSyncMillis = settingsRepo.closuresLastSyncMillis.first()
+        closuresLastSyncMillis = settingsRepo.closuresLastSyncMillis.first(),
+        permitsEnabled = settingsRepo.permitsEnabled()
     )
 }
 
@@ -72,6 +74,8 @@ sealed interface SourceResult {
     data class Closure(val status: ClosureStatus?) : SourceResult
     /** Null status: tow checks switched off. Unchecked / Stale are never "clear". */
     data class Tow(val deadlineMillis: Long?, val status: TowStatus?) : SourceResult
+    /** Null status: permit warnings switched off. Unchecked is never "clear". */
+    data class Permit(val status: PermitStatus?) : SourceResult
 }
 
 interface CurbRestrictionSource {
@@ -133,7 +137,7 @@ object CurbSources {
      * Fixed order. Arming, status and notices follow it, and soonestDeadline breaks a tie in favor of the
      * earlier one (sweep, RPP, meter, tow), exactly as the hand-written list it replaces did.
      */
-    val all: List<CurbRestrictionSource> = listOf(SweepSource, RppSource, MeterSource, ClosureSource, TowSource)
+    val all: List<CurbRestrictionSource> = listOf(SweepSource, RppSource, MeterSource, ClosureSource, TowSource, PermitSource)
 }
 
 /**
@@ -408,5 +412,50 @@ object TowSource : CurbRestrictionSource {
     override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) {
         if (!SettingsRepository(context).towEnabled()) return
         notifyTowOnPark(context, carId, parkedAtMillis)
+    }
+}
+
+/**
+ * Public Works temporary no-parking permits (PermitAlerts.kt): a "check the signs" source. A heads-up at the
+ * lead time, a park-time notice when one is in effect, a banner line. Never a deadline (no reliable hours).
+ * Added as the sixth source: nothing outside this object and its own files had to change to arm it, show it
+ * or cancel it, only the registry list, the banner and Settings.
+ */
+object PermitSource : CurbRestrictionSource {
+    override val id = SourceId.PERMIT
+    override val reminderKinds = setOf(ReminderKind.PERMIT_ADVANCE)
+    override val rollForwardKinds = emptySet<RollForwardKind>()
+    override val deadlineKinds = emptySet<DeadlineKind>()
+    override val notificationPurposes = setOf(NotificationIds.Purpose.PERMIT_ADVANCE, NotificationIds.Purpose.PERMIT_NOTICE)
+
+    /** Its own switch, plus one of the closure switches that fetch the data (SettingsRepository.permitsEnabled). */
+    override fun isEnabled(settings: SourceSettings) = settings.permitsEnabled
+    override val armsAtSave = false // the park-time step refreshes permit data, then arms
+
+    override suspend fun arm(
+        context: Context, db: AppDatabase, parked: ParkedState, car: Car, settings: SourceSettings, clearStaleNotifications: Boolean
+    ): ArmOutcome {
+        armPermitAlert(context, parked, car.name, isEnabled(settings), settings.closureLeadMillis)
+        return ArmOutcome(parked)
+    }
+
+    override suspend fun resolve(context: Context, parked: ParkedState, car: Car, settings: SourceSettings): SourceResult =
+        SourceResult.Permit(if (isEnabled(settings)) resolvePermitStatus(context, parked, settings.closureLeadMillis) else null)
+
+    override val unresolved: SourceResult get() = SourceResult.Permit(PermitStatus.Unchecked)
+
+    override fun cancelAll(context: Context, carId: Long) = cancelPermitAlerts(context, carId)
+
+    override suspend fun refreshForPark(context: Context) {
+        val settings = SettingsRepository(context)
+        if (!settings.permitsEnabled()) return
+        refreshIfOlderThan(settings.permitsLastSyncMillis.first(), "permit") {
+            StreetUsePermitRepository(context).refreshFromNetwork()
+        }
+    }
+
+    override suspend fun parkTimeNotice(context: Context, carId: Long, parkedAtMillis: Long) {
+        if (!SettingsRepository(context).permitsEnabled()) return
+        notifyPermitOnPark(context, carId, parkedAtMillis)
     }
 }

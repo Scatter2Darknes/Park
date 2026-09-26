@@ -53,7 +53,10 @@ data class ParkedState(
     // "Advance" is the heads-up at the tow/closure lead time (default 2 days before).
     val towNormalDeliveredForMillis: Long? = null,
     val towUrgentDeliveredForMillis: Long? = null,
-    val towAdvanceDeliveredForMillis: Long? = null
+    val towAdvanceDeliveredForMillis: Long? = null,
+    // The start of the temporary no-parking permit whose heads-up (see PermitAlerts.kt) was last delivered
+    // for this row. Same meaning as the markers above; a later permit on the block starts later, so it's due afresh.
+    val permitAdvanceDeliveredForMillis: Long? = null
 ) {
     /** The deadline [kind]'s reminder was last delivered for, or null if it never was. */
     fun deliveredForMillis(kind: ReminderKind): Long? = when (kind) {
@@ -66,6 +69,7 @@ data class ParkedState(
         ReminderKind.TOW_URGENT -> towUrgentDeliveredForMillis
         ReminderKind.TOW_ADVANCE -> towAdvanceDeliveredForMillis
         ReminderKind.TOW_ACTIVE -> null // one-off, like SWEEP_ACTIVE
+        ReminderKind.PERMIT_ADVANCE -> permitAdvanceDeliveredForMillis
     }
 }
 
@@ -129,6 +133,9 @@ interface ParkedStateDao {
 
     @Query("UPDATE parked_state SET towAdvanceDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun markTowAdvanceDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
+
+    @Query("UPDATE parked_state SET permitAdvanceDeliveredForMillis = :deadlineMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
+    suspend fun markPermitAdvanceDelivered(carId: Long, parkedAtMillis: Long, deadlineMillis: Long)
 
     @Query("UPDATE parked_state SET closureDeliveredForMillis = :closureStartMillis WHERE carId = :carId AND parkedAtMillis = :parkedAtMillis")
     suspend fun markClosureDelivered(carId: Long, parkedAtMillis: Long, closureStartMillis: Long)

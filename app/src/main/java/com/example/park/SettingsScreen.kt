@@ -146,6 +146,8 @@ fun SettingsScreen(
     var closureBackgroundSync by remember { mutableStateOf(SettingsDefaults.CLOSURE_BACKGROUND_SYNC) }
     var closureAlertLeadHours by remember { mutableStateOf(SettingsDefaults.CLOSURE_ALERT_LEAD_HOURS) }
     var towChecksEnabled by remember { mutableStateOf(SettingsDefaults.TOW_CHECKS_ENABLED) }
+    var permitChecksEnabled by remember { mutableStateOf(SettingsDefaults.PERMIT_CHECKS_ENABLED) }
+    var permitsLastSyncMillis by remember { mutableStateOf<Long?>(null) }
     var closureLeadMenuExpanded by remember { mutableStateOf(false) }
     var closuresLastSyncMillis by remember { mutableStateOf<Long?>(null) }
     var towLastSyncMillis by remember { mutableStateOf<Long?>(null) }
@@ -190,6 +192,8 @@ fun SettingsScreen(
         closureBackgroundSync = settings.closureBackgroundSync.first()
         closureAlertLeadHours = settings.closureAlertLeadHours.first()
         towChecksEnabled = settings.towChecksEnabled.first()
+        permitChecksEnabled = settings.permitChecksEnabled.first()
+        permitsLastSyncMillis = settings.permitsLastSyncMillis.first()
         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
         towLastSyncMillis = settings.towLastSyncMillis.first()
         towNewestEntryMillis = settings.towNewestEntryMillis.first()
@@ -1339,12 +1343,41 @@ fun SettingsScreen(
                     }
                 )
             }
+            // Public Works permits: same dependency as tow (the switches above fetch the data).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("No-parking permit warnings")
+                    Text(
+                        if (permitChecksEnabled) "Short-term Public Works permits (moving vans, staging, events) on your block: " +
+                            "a heads-up and a banner line to check the signs. They have no reliable hours, so no countdown."
+                        else "Off: no permit warnings, and no permit data downloaded.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = permitChecksEnabled,
+                    enabled = closureParkTimeCheck || closureBackgroundSync,
+                    onCheckedChange = { checked ->
+                        permitChecksEnabled = checked
+                        scope.launch {
+                            settings.setPermitChecksEnabled(checked)
+                            rescheduleAllActiveReminders(context) // off: drops the permit alarm and notices
+                        }
+                    }
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         val closuresCheckedText = closuresLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
         Text("Closures last checked: $closuresCheckedText", style = MaterialTheme.typography.bodySmall)
         val towCheckedText = towLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
         Text("Tow zones last checked: $towCheckedText", style = MaterialTheme.typography.bodySmall)
+        val permitsCheckedText = permitsLastSyncMillis?.let { formatRelativeTime(it) } ?: "Never"
+        Text("No-parking permits last checked: $permitsCheckedText", style = MaterialTheme.typography.bodySmall)
         // The city's tow feed stopped getting new permits in July 2026. Say so here too, not only in
         // the banner, so "last checked: 2 hours ago" can't be read as "the data is current".
         if (towChecksEnabled && towLastSyncMillis != null && towFeedIsStale(towNewestEntryMillis, System.currentTimeMillis())) {
@@ -1380,9 +1413,15 @@ fun SettingsScreen(
                         } catch (e: Exception) {
                             "tow zones failed (${e.message})"
                         }
+                        val permitResult = if (!permitChecksEnabled) "permits off" else try {
+                            "${StreetUsePermitRepository(context).refreshFromNetwork()} no-parking permits"
+                        } catch (e: Exception) {
+                            "permits failed (${e.message})"
+                        }
                         refreshParkedSchedulesAfterSync(context)
-                        closureCheckMessage = "Checked citywide: $closureResult, $towResult."
+                        closureCheckMessage = "Checked citywide: $closureResult, $towResult, $permitResult."
                         closuresLastSyncMillis = settings.closuresLastSyncMillis.first()
+                        permitsLastSyncMillis = settings.permitsLastSyncMillis.first()
                         towLastSyncMillis = settings.towLastSyncMillis.first()
                         towNewestEntryMillis = settings.towNewestEntryMillis.first()
                         closureCheckRunning = false

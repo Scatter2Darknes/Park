@@ -374,6 +374,20 @@ Clariti 838, `sftu-nd43` 155, Active Street-Use 4,206 (Street-Use approved since
 - `sftu-nd43` has the tow feed's exact shape, including hours, but covers city agencies only.
 - Anything built on these would be an "uncertain / check signs" match at best, like the app's uncertain tow matches.
 
+### Corrections found while building the permit source (2026-09-25)
+- **Clariti has no location key at all**: `cnn` is empty on every row and `location` is empty on all 8,284; only a
+  house address (`permit_address`, "1695 19TH AVE"). The app can't match it to a block without an
+  address-to-CNN lookup, so it is NOT used yet (a separate investigation).
+- **"Awaiting Applicant Info" is not "not issued"** in Clariti: issued permits waiting for their tow-sign photo
+  (phase "Tow Sign Photo") carry it. The findings above excluded it, so Clariti's volume is an undercount.
+- **Street Space permits are months-long construction staging** (Sep → Mar), not short-notice no-parking. Excluded.
+- **The old system's TempOccup rows** have one row per block with the CNN and coordinates, ~430 live citywide,
+  often one permit over many blocks (e.g. 26TOC-03357: 15 blocks, Aug 17–Sep 30, 8 AM–5 PM).
+
+Built (branch `permit-source`, owner decisions): `PermitSource`, temporary-occupancy permits from `b6tj-gt35`
+only, as "check the signs" warnings (heads-up at the lead time, park-time notice when in effect, banner line),
+never a deadline. Room v23 (new `street_use_permit` table + `parked_state.permitAdvanceDeliveredForMillis`).
+
 ---
 
 ## Part B results (2026-09-25, branch `curb-sources`)

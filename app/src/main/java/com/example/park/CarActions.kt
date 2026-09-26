@@ -18,7 +18,10 @@ data class CarWithStatus(
     val rppDeadline: RppWarning? = null,
     val closureStatus: ClosureStatus? = null,
     val towDeadlineMillis: Long? = null,
-    val towStatus: TowStatus? = null
+    val towStatus: TowStatus? = null,
+    // Public Works temporary no-parking permits (see PermitAlerts.kt): a banner line, never a deadline.
+    // Null when the car isn't parked or permit warnings are off.
+    val permitStatus: PermitStatus? = null
 )
 
 enum class DeadlineKind { SWEEP, RPP, METER, TOW }
@@ -58,7 +61,8 @@ suspend fun loadCarsWithStatus(context: Context): List<CarWithStatus> {
             rppDeadline = results.firstNotNullOfOrNull { (it as? SourceResult.Rpp)?.warning },
             closureStatus = results.firstNotNullOfOrNull { (it as? SourceResult.Closure)?.status },
             towDeadlineMillis = tow?.deadlineMillis,
-            towStatus = tow?.status
+            towStatus = tow?.status,
+            permitStatus = results.firstNotNullOfOrNull { (it as? SourceResult.Permit)?.status }
         )
     }
 }

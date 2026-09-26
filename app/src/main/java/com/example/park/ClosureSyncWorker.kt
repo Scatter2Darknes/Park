@@ -44,6 +44,17 @@ class ClosureSyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             } catch (e: Exception) {
                 android.util.Log.e("TowSync", "Background tow sync failed", e)
             }
+            // Public Works no-parking permits, likewise on their own switch and in their own try.
+            try {
+                if (SettingsRepository(applicationContext).permitChecksEnabled.first()) {
+                    val permitCount = StreetUsePermitRepository(applicationContext).refreshFromNetwork()
+                    android.util.Log.d("PermitSync", "Background permit sync complete: $permitCount permits")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("PermitSync", "Background permit sync failed", e)
+            }
             // Parked cars pick up new, moved or cancelled closures right away.
             refreshParkedSchedulesAfterSync(applicationContext)
             Result.success()

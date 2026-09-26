@@ -267,6 +267,38 @@ class MigrationTest {
         )
     }
 
+    @Test
+    fun migrate22To23_keepsParkedRows_andAddsPermitTableAndNullMarker() {
+        helper.createDatabase(TEST_DB, 22).apply {
+            execSQL(
+                """
+                INSERT INTO parked_state
+                    (id, carId, segmentBlockSweepId, sideConfirmed, parkedLat, parkedLng,
+                     parkedAtMillis, nextSweepAtMillis, notificationScheduled, towAdvanceDeliveredForMillis)
+                VALUES
+                    (1, 42, 'block-123', 1, 37.7749, -122.4194, 1000000, 2000000, 1, 6000000)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        // Also validates street_use_permit's columns and indices against schemas/23.json.
+        val db = helper.runMigrationsAndValidate(TEST_DB, 23, true, MIGRATION_22_23)
+
+        db.query("SELECT carId, towAdvanceDeliveredForMillis, permitAdvanceDeliveredForMillis FROM parked_state").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(42L, c.getLong(0))
+            assertEquals(6000000L, c.getLong(1))
+            assertTrue(c.isNull(2))
+        }
+        db.execSQL(
+            """
+            INSERT INTO street_use_permit (rowKey, permitNumber, cnn, startMillis, endMillis)
+            VALUES ('26TOC-1_100', '26TOC-1', '100', 1000, 2000)
+            """.trimIndent()
+        )
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

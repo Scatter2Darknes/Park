@@ -35,7 +35,11 @@ class CurbSourcesTest {
     @Test
     fun theRegistryOrderIsTheOldHandWrittenOrder() {
         // Arming ran sweep, RPP, closures, tow; soonestDeadline listed sweep, RPP, meter, tow (ties go to the first).
-        assertEquals(listOf(SourceId.SWEEP, SourceId.RPP, SourceId.METER, SourceId.CLOSURE, SourceId.TOW), sources.map { it.id })
+        // New sources go at the end, so none of those orders changes.
+        assertEquals(
+            listOf(SourceId.SWEEP, SourceId.RPP, SourceId.METER, SourceId.CLOSURE, SourceId.TOW, SourceId.PERMIT),
+            sources.map { it.id }
+        )
     }
 
     @Test

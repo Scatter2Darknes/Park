@@ -1371,6 +1371,17 @@ fun MapScreen(
                                             modifier = Modifier.padding(top = 4.dp)
                                         )
                                     }
+                                // Public Works no-parking permits: the single most important permit line.
+                                activeParkedCars
+                                    .mapNotNull { c -> permitBannerText(c.permitStatus)?.let { Triple(c, it, permitBannerRank(c.permitStatus)) } }
+                                    .minByOrNull { it.third }
+                                    ?.let { (c, line, _) ->
+                                        Text(
+                                            if (c.car.id == mostUrgent.car.id || permitLineIsFeedWide(c.permitStatus)) line else "${c.car.name}: $line",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
                             }
 
                             if (parkedBannerExpanded) {
@@ -1437,6 +1448,9 @@ fun MapScreen(
                                                 }
                                             towBannerText(item.towStatus, now)
                                                 ?.takeUnless { towLineIsFeedWide(item.towStatus) }
+                                                ?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                            permitBannerText(item.permitStatus)
+                                                ?.takeUnless { permitLineIsFeedWide(item.permitStatus) }
                                                 ?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                                         }
                                         Text(

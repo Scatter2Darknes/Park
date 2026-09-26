@@ -14,9 +14,13 @@ fun towLineIsFeedWide(status: TowStatus?): Boolean = status is TowStatus.Stale |
 /** Whether the closure line for [status] is about the city's closure data, not the car's spot. */
 fun closureLineIsFeedWide(status: ClosureStatus?): Boolean = status == ClosureStatus.Unchecked
 
-/** The feed-wide lines across [cars], each once: closure first, then tow (the order each car's lines use). */
+/** Whether the permit line for [status] is about the city's permit data, not the car's spot. */
+fun permitLineIsFeedWide(status: PermitStatus?): Boolean = status == PermitStatus.Unchecked
+
+/** The feed-wide lines across [cars], each once: closure, then tow, then permits (the order each car's lines use). */
 fun feedWideBannerLines(cars: List<CarWithStatus>, nowMillis: Long): List<String> {
     val closure = cars.mapNotNull { c -> c.closureStatus?.takeIf(::closureLineIsFeedWide)?.let { closureBannerText(it, nowMillis) } }
     val tow = cars.mapNotNull { c -> c.towStatus?.takeIf(::towLineIsFeedWide)?.let { towBannerText(it, nowMillis) } }
-    return (closure + tow).distinct()
+    val permit = cars.mapNotNull { c -> c.permitStatus?.takeIf(::permitLineIsFeedWide)?.let { permitBannerText(it) } }
+    return (closure + tow + permit).distinct()
 }

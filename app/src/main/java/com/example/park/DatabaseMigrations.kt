@@ -304,10 +304,38 @@ val MIGRATION_21_22 = Migration(21, 22) { db ->
     db.execSQL("ALTER TABLE saved_location ADD COLUMN isOffStreet INTEGER")
 }
 
+/**
+ * v22 -> v23: Public Works temporary no-parking permits (StreetUsePermit, PermitAlerts.kt). A new
+ * street_use_permit table (filled by the next sync) and one nullable delivery marker on parked_state for the
+ * permit heads-up. All additive; nothing existing changes.
+ */
+val MIGRATION_22_23 = Migration(22, 23) { db ->
+    db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS street_use_permit (
+            rowKey TEXT NOT NULL PRIMARY KEY,
+            permitNumber TEXT NOT NULL,
+            cnn TEXT NOT NULL,
+            streetName TEXT,
+            crossStreet1 TEXT,
+            crossStreet2 TEXT,
+            purpose TEXT,
+            status TEXT,
+            startMillis INTEGER NOT NULL,
+            endMillis INTEGER NOT NULL,
+            lastSeenSyncId INTEGER
+        )
+        """.trimIndent()
+    )
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_street_use_permit_cnn ON street_use_permit (cnn)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS index_street_use_permit_endMillis ON street_use_permit (endMillis)")
+    db.execSQL("ALTER TABLE parked_state ADD COLUMN permitAdvanceDeliveredForMillis INTEGER")
+}
+
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
     MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
+    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23
 )
 
 /*

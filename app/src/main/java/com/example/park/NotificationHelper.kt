@@ -18,7 +18,10 @@ import androidx.core.app.NotificationManagerCompat
 // The TOW_ kinds are the temporary tow-zone family (TowAlerts.kt): NORMAL/URGENT behave exactly like
 // the sweep and RPP pairs, ADVANCE is the extra heads-up at the tow/closure lead time (normal channel,
 // with its own delivery marker), and ACTIVE is the tow counterpart of SWEEP_ACTIVE.
-enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE, TOW_NORMAL, TOW_URGENT, TOW_ADVANCE, TOW_ACTIVE }
+// PERMIT_ADVANCE is the heads-up for a Public Works temporary no-parking permit on the car's block
+// (PermitAlerts.kt), at the same lead time: normal channel, own delivery marker, never a deadline tier.
+// New kinds go at the END: armed alarms carry kinds by NAME, so existing names must never change.
+enum class ReminderKind { NORMAL, URGENT, RPP_NORMAL, RPP_URGENT, SWEEP_ACTIVE, TOW_NORMAL, TOW_URGENT, TOW_ADVANCE, TOW_ACTIVE, PERMIT_ADVANCE }
 
 object NotificationHelper {
     const val CHANNEL_ID_NORMAL = "parking_reminders"

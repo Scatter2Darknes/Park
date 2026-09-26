@@ -49,6 +49,8 @@ object SettingsKeys {
     val TOW_LAST_SYNC_MILLIS = longPreferencesKey("tow_last_sync_millis")
     val TOW_NEWEST_ENTRY_MILLIS = longPreferencesKey("tow_newest_entry_millis")
     val TOW_CHECKS_ENABLED = booleanPreferencesKey("tow_checks_enabled")
+    val PERMIT_CHECKS_ENABLED = booleanPreferencesKey("permit_checks_enabled")
+    val PERMITS_LAST_SYNC_MILLIS = longPreferencesKey("permits_last_sync_millis")
     val DRIVING_MODE_ZOOM = floatPreferencesKey("driving_mode_zoom")
     val DRIVING_MODE_AUTO_CENTER = booleanPreferencesKey("driving_mode_auto_center")
     val DRIVING_MODE_AUTO_ZOOM = booleanPreferencesKey("driving_mode_auto_zoom")
@@ -147,6 +149,9 @@ object SettingsDefaults {
     // Tow zones: on by default, as before this switch existed. Still needs one of the two closure
     // switches on, because those are what fetch the city's data.
     const val TOW_CHECKS_ENABLED = true
+    // Public Works temporary no-parking permits ("check the signs" warnings): on by default, and like tow,
+    // they need one of the two closure switches on, because those fetch the data.
+    const val PERMIT_CHECKS_ENABLED = true
 }
 
 /** Choices for how far ahead a street-closure alert goes out, in hours. */
@@ -600,6 +605,27 @@ class SettingsRepository(private val context: Context) {
      * fetch, no tow alarms, no tow notices, no tow banner line. Closures can stay on with tow off.
      */
     suspend fun towEnabled(): Boolean = closuresEnabled() && towChecksEnabled.first()
+
+    /** The user's switch for Public Works no-parking permit warnings. See [permitsEnabled]. */
+    val permitChecksEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.PERMIT_CHECKS_ENABLED] ?: SettingsDefaults.PERMIT_CHECKS_ENABLED
+    }
+
+    suspend fun setPermitChecksEnabled(value: Boolean) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.PERMIT_CHECKS_ENABLED] = value }
+    }
+
+    /** Whether permit warnings run: their switch on AND a closure switch on (those fetch the data), like [towEnabled]. */
+    suspend fun permitsEnabled(): Boolean = closuresEnabled() && permitChecksEnabled.first()
+
+    /** When the permit data was last fetched COMPLETELY (StreetUsePermitRepository), or null if never. */
+    val permitsLastSyncMillis: Flow<Long?> = context.dataStore.data.map { prefs ->
+        prefs[SettingsKeys.PERMITS_LAST_SYNC_MILLIS]
+    }
+
+    suspend fun setPermitsLastSyncMillis(value: Long) {
+        context.dataStore.edit { prefs -> prefs[SettingsKeys.PERMITS_LAST_SYNC_MILLIS] = value }
+    }
 
     /**
      * Whether Park has ever put up Android's notification-permission dialog (or the explanation before it).
