@@ -157,7 +157,9 @@ class SourceIsolationTest {
         db.streetSegmentDao().insertAll(listOf(segment("S1", "100", s1Points), segment("S2", "200", s2Points)))
         db.rppZoneRegulationDao().insertAll(listOf(rpp("R1", s1Points)))
         db.towZoneDao().insertAll(listOf(tow("T1", "100")))
-        db.parkedStateDao().upsert(parked(1, "S1", s1Points[0], rppId = "R1").copy(nextSweepAtMillis = now + 86_400_000L))
+        // Sweep a week out, so the tow zone's first window (tomorrow 7 AM SF) is the soonest deadline at any hour.
+        // (It was "now + 24 h", which comes BEFORE tomorrow 7 AM when the test runs between midnight and 7 AM SF.)
+        db.parkedStateDao().upsert(parked(1, "S1", s1Points[0], rppId = "R1").copy(nextSweepAtMillis = now + 7 * 86_400_000L))
         db.parkedStateDao().upsert(parked(2, "S2", s2Points[0]))
         corrupt("rpp_zone_regulation", "objectId", "R1")
 
