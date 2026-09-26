@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -94,10 +94,19 @@ SELECTS = {
     "sweep": (SWEEP, "cnn,corridor,limits,cnnrightleft,blockside,line", "blocksweepid"),
     "signs": ("sftu-nd43", "permitnumber,category,cnn,sideofstreet,location_1,address,startdate,enddate", "signid"),
     # Old street-use system: one row per permit per block, with the block's official CNN AND the permit's address.
-    "street_use": ("b6tj-gt35", "permit_number,cnn,streetname,permit_type,permit_address,permit_start_date",
-                   "permit_number,cnn"),
+    "street_use": ("b6tj-gt35", "permit_number,cnn,streetname,permit_type,permit_purpose,status,permit_address,"
+                                "permit_start_date,permit_end_date", "permit_number,cnn"),
+    # What the app's PermitSource downloads today (StreetUsePermitApi.permitWhereClause), for the warning baseline.
+    "street_use_live": ("b6tj-gt35", "permit_number,cnn,permit_start_date,permit_end_date,status", "permit_number,cnn"),
 }
-WHERES = {"street_use": "permit_type = 'TempOccup' AND permit_start_date >= '2026-01-01T00:00:00'"}
+DEAD_STATUSES = ("VOID", "WITHDRAW", "CANCELLED", "CLOSED", "EXPIRED")   # as StreetUsePermitApi.kt
+WHERES = {
+    "street_use": "permit_type = 'TempOccup' AND permit_start_date >= '2026-01-01T00:00:00'",
+    "street_use_live": f"permit_type = 'TempOccup' AND permit_end_date >= '{date.today().isoformat()}T00:00:00' AND "
+                       f"(status IS NULL OR status NOT IN ({','.join(repr(s) for s in DEAD_STATUSES)}))",
+}
+# A cached file without this column predates it and is fetched again.
+NEEDS_COLUMN = {"centerline": "f_node_cnn", "street_use": "permit_purpose"}
 
 
 def fetch_all(key: str) -> list:
@@ -120,8 +129,8 @@ def load(save_dir: Optional[str], from_dir: Optional[str]) -> Dict[str, list]:
         for k in SELECTS:
             path = Path(from_dir) / f"{k}.json"
             rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-            # A centerline file cached before the node columns were added is fetched again.
-            if rows is None or (k == "centerline" and not any("f_node_cnn" in r for r in rows[:50])):
+            col = NEEDS_COLUMN.get(k)
+            if rows is None or (col and not any(col in r for r in rows[:200])):
                 rows = fetch_all(k)
                 path.write_text(json.dumps(rows), encoding="utf-8")
             data[k] = rows
@@ -537,68 +546,196 @@ def report(data: Dict[str, list], today: date, samples: int) -> int:
 
     section("Method check on the old street-use system (b6tj-gt35 TempOccup since 2026-01-01): address -> CNN "
             "vs the blocks the permit was issued for")
+    neighbours = make_neighbours(segs)
     blocks: Dict[str, set] = defaultdict(set)
-    addr: Dict[str, str] = {}
+    info: Dict[str, dict] = {}
     for r in data.get("street_use") or []:
         n = r.get("permit_number")
         if n and r.get("cnn"):
             blocks[n].add(_cnn(r.get("cnn")))
             if r.get("permit_address"):
-                addr[n] = r["permit_address"]
-    # Block adjacency through shared intersection nodes, to measure how far off a wrong-street address is.
+                info[n] = r
+    cases: List[Case] = []
+    unmatched = 0
+    for n, r in info.items():
+        res = join({"permit_address": r["permit_address"]}, full, nosuf, notype, by_range)
+        if res.outcome != "single":
+            unmatched += 1
+            continue
+        cases.append(Case(n, r["permit_address"], (r.get("permit_purpose") or "").strip(), res.parsed.name,
+                          res.cnns[0], frozenset(blocks[n])))
+    print(f"  permits with an address: {len(info):,} (of {len(blocks):,}); no single match: {unmatched}; "
+          f"compared: {len(cases):,}. All are permit_type TempOccup (the query filters on it).")
+    print_three(cases, neighbours, "all")
+    nblocks = Counter("1 block" if len(k.real) == 1 else "2 blocks" if len(k.real) == 2 else "3+ blocks" for k in cases)
+    print(f"  blocks per permit: {dict(nblocks)}")
+    distance = Counter(hops(k.addr_cnn, k.real, neighbours) for k in cases if k.addr_cnn not in k.real)
+    print(f"  when the address block is wrong, the nearest real block is: {dict(distance)}")
+
+    section("Follow-up 1: the same three numbers by permit_purpose")
+    print("| purpose | permits | address block is one of them | is the only one | corner-widened covers all |")
+    print("|---|---|---|---|---|")
+    by_purpose: Dict[str, List[Case]] = defaultdict(list)
+    for k in cases:
+        by_purpose[purpose_group(k.purpose)].append(k)
+    for p, ks in sorted(by_purpose.items(), key=lambda kv: -len(kv[1])):
+        one, only, ring = three(ks, neighbours)
+        print(f"| {p} | {len(ks)} | {pct(one, len(ks))} | {pct(only, len(ks))} | {pct(ring, len(ks))} |")
+    print(f"  raw purposes (top 25): {Counter(k.purpose for k in cases).most_common(25)}")
+
+    section("Follow-up 2: where the address-block misses cluster")
+    miss = [k for k in cases if k.addr_cnn not in k.real]
+    kinds = Counter()
+    for k in miss:
+        real_names = {segs[b].name for b in k.real if b in segs}
+        kinds["real block on the SAME street as the address (other block number)" if k.street in real_names
+              else "real block on a DIFFERENT street"] += 1
+    print(f"  {len(miss)} misses: {dict(kinds)}")
+    print(f"  distinct addresses {len(set(k.address for k in miss))}, distinct address streets "
+          f"{len(set(k.street for k in miss))}, distinct applicants' purposes {len(set(k.purpose for k in miss))}")
+    print(f"  most repeated addresses: {Counter(k.address for k in miss).most_common(10)}")
+    print(f"  most repeated address streets: {Counter(k.street for k in miss).most_common(10)}")
+    pairs = Counter()
+    for k in miss:
+        for b in k.real:
+            if b in segs:
+                pairs[f"{k.street} -> {segs[b].name}"] += 1
+    print(f"  most repeated (address street -> real street) pairs: {pairs.most_common(12)}")
+    top10 = sum(n for _, n in Counter(k.address for k in miss).most_common(10))
+    print(f"  the 10 most repeated addresses account for {pct(top10, len(miss))} of the misses")
+    print(f"  miss purposes: {Counter(purpose_group(k.purpose) for k in miss).most_common()}")
+    # Would an address -> block exception list help? Honest version: a miss counts as fixed only if an EARLIER
+    # permit at the same address already showed its real block (the list is learned before the permit is seen).
+    seen: Dict[str, set] = defaultdict(set)
+    fixed = 0
+    for k in sorted(cases, key=lambda k: k.number):   # permit numbers are issued in order (25TOC-… < 26TOC-…)
+        if k.addr_cnn not in k.real and k.real & seen[k.address]:
+            fixed += 1
+        seen[k.address] |= k.real
+    print(f"  an address -> block list learned from earlier permits would have fixed {pct(fixed, len(miss))} of misses")
+    per_addr = Counter(k.address for k in cases)
+    print_three([k for k in cases if per_addr[k.address] == 1], neighbours, "addresses seen once")
+    print_three([k for k in cases if per_addr[k.address] > 1], neighbours, "addresses seen 2+ times")
+    print("  every miss:")
+    for k in sorted(miss, key=lambda k: (k.street, k.address)):
+        names = sorted({segs[b].name for b in k.real if b in segs})
+        print(f"    {k.number:14} {k.address!r:36} [{purpose_group(k.purpose)}] -> real: {', '.join(names)} "
+              f"({hops(k.addr_cnn, k.real, neighbours)})")
+
+    section("Follow-up 3: warning volume")
+    sweep_cnns = {_cnn(r.get("cnn")) for r in data["sweep"]}
+    ring_sizes = sorted(len(({k.addr_cnn} | neighbours(k.addr_cnn)) & sweep_cnns) for k in cases)
+    ring_all = sorted(len({k.addr_cnn} | neighbours(k.addr_cnn)) for k in cases)
+    addr_swept = sum(1 for k in cases if k.addr_cnn in sweep_cnns)
+    real_swept = sorted(len(k.real & sweep_cnns) for k in cases)
+    print(f"  per permit (687 set), blocks flagged: address only = 1 ({addr_swept} of {len(cases)} are swept blocks the "
+          f"app can warn on); address + corner blocks = median {ring_all[len(ring_all)//2]}, mean "
+          f"{sum(ring_all)/len(ring_all):.1f} (swept ones: median {ring_sizes[len(ring_sizes)//2]}, mean "
+          f"{sum(ring_sizes)/len(ring_sizes):.1f}); the permits' real blocks: mean {sum(len(k.real) for k in cases)/len(cases):.2f} "
+          f"(swept: {sum(real_swept)/len(real_swept):.2f})")
+    warning_volume(data, results, segs, neighbours, sweep_cnns, today)
+    return 0
+
+
+@dataclass(frozen=True)
+class Case:
+    """One old-system permit with an address: where the address lands vs the blocks it was issued for."""
+    number: str
+    address: str
+    purpose: str
+    street: str
+    addr_cnn: str
+    real: frozenset
+
+
+def make_neighbours(segs: Dict[str, Segment]):
+    """cnn -> the blocks that share an intersection node (a corner) with it."""
     by_node: Dict[str, set] = defaultdict(set)
     for s in segs.values():
-        for nd in s.nodes:
-            by_node[nd].add(s.cnn)
+        if s.active:
+            for nd in s.nodes:
+                by_node[nd].add(s.cnn)
 
     def neighbours(cnn: str) -> set:
         s = segs.get(cnn)
         return set().union(*(by_node[nd] for nd in s.nodes)) - {cnn} if s and s.nodes else set()
+    return neighbours
 
-    def hops(a: str, targets: set) -> str:
-        ring1 = neighbours(a)
-        if ring1 & targets:
-            return "adjacent (shares a corner)"
-        ring2 = set().union(*(neighbours(x) for x in ring1)) if ring1 else set()
-        return "two blocks away" if ring2 & targets else "further"
 
-    distance = Counter()
-    covered_by_ring = Counter()
-    c = Counter()
-    nblocks = Counter()
-    misses: List[str] = []
-    for n, a in addr.items():
-        res = join({"permit_address": a}, full, nosuf, notype, by_range)
-        if res.outcome != "single":
-            c[f"join {res.outcome}"] += 1
-            continue
-        k = len(blocks[n])
-        nblocks["1 block" if k == 1 else "2 blocks" if k == 2 else "3+ blocks"] += 1
-        ring = {res.cnns[0]} | neighbours(res.cnns[0])
-        covered_by_ring["all permit blocks" if blocks[n] <= ring else
-                        "some" if blocks[n] & ring else "none"] += 1
-        if res.cnns[0] not in blocks[n]:
-            distance[hops(res.cnns[0], blocks[n])] += 1
-        if res.cnns[0] in blocks[n]:
-            c["address block is one of the permit's blocks"] += 1
-            if k == 1:
-                c["  ...and the permit covers only that block"] += 1
-        else:
-            c["address block NOT among the permit's blocks"] += 1
-            if len(misses) < 8:
-                names = [f"{b}:{segs[b].name}" if b in segs else b for b in sorted(blocks[n])]
-                misses.append(f"{n} {a!r} -> {res.cnns[0]}:{segs[res.cnns[0]].name if res.cnns[0] in segs else '?'}"
-                              f"; permit blocks {names}")
-    print(f"  permits with an address: {len(addr):,} (of {len(blocks):,}); address formats: "
-          f"{Counter(shape(a) for a in addr.values()).most_common(5)}")
-    for k, v in c.items():
-        print(f"  {k}: {v:,}")
-    print(f"  blocks per matched permit: {dict(nblocks)}")
-    print(f"  when the address block is wrong, the nearest real block is: {dict(distance)}")
-    print(f"  address block + every block sharing a corner with it covers: {dict(covered_by_ring)}")
-    for m in misses:
-        print(f"    {m}")
-    return 0
+def hops(a: str, targets: frozenset, neighbours) -> str:
+    if a in targets:
+        return "same block"
+    ring1 = neighbours(a)
+    if ring1 & targets:
+        return "adjacent (shares a corner)"
+    ring2 = set().union(*(neighbours(x) for x in ring1)) if ring1 else set()
+    return "two blocks away" if ring2 & targets else "further"
+
+
+def three(cases: List[Case], neighbours) -> Tuple[int, int, int]:
+    one = sum(1 for k in cases if k.addr_cnn in k.real)
+    only = sum(1 for k in cases if k.real == {k.addr_cnn})
+    ring = sum(1 for k in cases if k.real <= ({k.addr_cnn} | neighbours(k.addr_cnn)))
+    return one, only, ring
+
+
+def print_three(cases: List[Case], neighbours, label: str) -> None:
+    one, only, ring = three(cases, neighbours)
+    print(f"  [{label}] address block is one of the real blocks: {pct(one, len(cases))}; is the only real block: "
+          f"{pct(only, len(cases))}; address + corner blocks cover every real block: {pct(ring, len(cases))}")
+
+
+PURPOSE_GROUPS = [  # first match wins; checked against the raw purposes the report prints
+    ("moving / delivery", r"MOV|DELIVER|RELOCAT|U-?HAUL|PODS"),
+    ("construction / staging", r"CONSTR|STAG|CONTRACTOR|BUILD|REMODEL|RENOV|DEMO|ROOF|EQUIP|MATERIAL|CONCRETE|WORK"),
+    ("crane / lift", r"CRANE|LIFT|BOOM|HOIST"),
+    ("scaffold", r"SCAFFOLD"),
+    ("debris box / container", r"DEBRIS|DUMPSTER|BIN\b|CONTAINER|BOX"),
+    ("film / photo", r"FILM|PHOTO|SHOOT|PRODUCTION|COMMERCIAL"),
+    ("event", r"EVENT|FESTIVAL|FAIR|PARTY|WEDDING|FUNERAL|CELEBRAT|PARADE"),
+    ("tree / utility", r"TREE|UTILIT|PG&?E|SEWER|WATER|GAS|TELECOM|FIBER|AT&T"),
+    ("parking", r"PARK|VEHICLE|TRUCK|VAN"),
+]
+
+
+def purpose_group(p: str) -> str:
+    text = (p or "").upper()
+    if not text:
+        return "(blank)"
+    for name, pattern in PURPOSE_GROUPS:
+        if re.search(pattern, text):
+            return name
+    return "other"
+
+
+def warning_volume(data: Dict[str, list], results: List["Result"], segs: Dict[str, Segment], neighbours,
+                   sweep_cnns: set, today: date) -> None:
+    """Share of the app's swept blocks carrying a permit warning right now (in effect or starting within 2 days),
+    i.e. roughly the chance a random park gets one: today's feed vs adding Clariti under each policy."""
+    horizon = (today + timedelta(days=2)).isoformat()
+    now = today.isoformat()
+
+    def in_window(start: Optional[str], end: Optional[str]) -> bool:
+        return bool(start) and bool(end) and start[:10] <= horizon and end[:10] >= now
+
+    base = {_cnn(r.get("cnn")) for r in data.get("street_use_live") or []
+            if in_window(r.get("permit_start_date"), r.get("permit_end_date"))} & sweep_cnns
+    total = len(sweep_cnns)
+    print(f"  swept blocks (what the app can warn on): {total:,}")
+    print(f"  today's feed (b6tj TempOccup, as the app downloads it), in effect or starting by {horizon}: "
+          f"{pct(len(base), total)} of swept blocks")
+    for label, types in (("Clariti Temporary Occupancy", {"Temporary Occupancy"}),
+                         ("Clariti TOC + Street Space", {"Temporary Occupancy", "Street Space"})):
+        live = [r for r in results if r.outcome == "single" and r.row.get("permit_type") in types
+                and (r.row.get("status") or "").upper() not in DEAD_STATUSES
+                and in_window(r.row.get("permit_start_date"), r.row.get("permit_end_date"))]
+        addr = {r.cnns[0] for r in live} & sweep_cnns
+        ring = set().union(*({r.cnns[0]} | neighbours(r.cnns[0]) for r in live)) & sweep_cnns if live else set()
+        print(f"  + {label} ({len(live)} permits in the window):")
+        print(f"      address only: {pct(len(addr), total)} of swept blocks; with today's feed: "
+              f"{pct(len(addr | base), total)}")
+        print(f"      address + corner blocks: {pct(len(ring), total)}; with today's feed: {pct(len(ring | base), total)}"
+              f"  (x{len(ring) / max(1, len(addr)):.1f} the address-only blocks)")
 
 
 def side_report(results: List[Result], segs: Dict[str, Segment], sweep: list, eas: list, rnd: random.Random) -> None:

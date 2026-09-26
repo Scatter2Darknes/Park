@@ -177,3 +177,63 @@ the false-safe miss more likely, so it isn't worth adding until there is real si
 - Blank-address Clariti permits (3.4%, mostly Temporary Occupancy) can't be placed at all.
 - Decision for Z: is a "nearby permit, check the signs" hint at ~90% coverage worth a sixth feed, given that the
   existing `b6tj-gt35` TempOccup feed already gives exact blocks for the old system's permits?
+
+## Follow-ups (2026-09-26, same run)
+
+### F1. Temporary Occupancy only
+The 687-permit comparison set in section 3 is **already TOC-only**: the script's query is `permit_type = 'TempOccup'`,
+so 78.6% (address block is one of the real blocks) / 67.8% (the only one) / 90.4% (corner-widened covers all) are
+the TOC numbers. There is no blended figure to separate.
+
+The by-use-case split (staging, events, scaffolding, …) **can't be done from this data**: `permit_purpose` is blank on
+686 of the 687. The nearest proxy is repeat vs one-off addresses (repeat addresses are mostly large buildings and
+institutions):
+
+| addresses | address block is one of them | the only one | corner-widened covers all |
+|---|---|---|---|
+| seen once (407 permits) | 82.6% | 71.0% | 92.6% |
+| seen 2+ times (280 permits) | 72.9% | 63.2% | 87.1% |
+
+### F2. Where the misses cluster
+- **Not street aliases.** 133 of the 147 misses are on a **different street** (a cross street or an alley behind the
+  building); 14 are the same street, next block. No renamed corridor shows up: the one Cesar Chavez case is a
+  corner lot (`1801 CASTRO ST` -> Cesar Chavez, sharing the corner). EAS and the centerline both already use
+  current names, so an alias table has nothing to fix here.
+- **Concentrated by building, not by street name.** 147 misses come from 91 distinct addresses on 65 streets, but
+  the top 10 addresses make up 41%: `1 MARKET ST` x18 (-> Spear), `909 GEARY ST` x12 (-> Myrtle, the alley behind),
+  `149 NEW MONTGOMERY ST` x8 (-> Minna), `555 PINE ST` x6 (-> Bush), `1101 VAN NESS AVE` x4 (-> Geary),
+  `1 DR CARLTON B GOODLETT PL` x3 (City Hall -> Grove/Larkin/McAllister/Van Ness), `905 CALIFORNIA ST` x3 (-> Pine).
+- **An exception list would be address -> block, not street -> alias.** Measured honestly (a miss counts as fixed
+  only if an *earlier* permit at the same address already showed the right block), it would have fixed **55 of 147
+  (37%)**, lifting "address block is one of the real blocks" from 78.6% to about 86.6%. It has to be learned from
+  permits whose blocks are known (the old system), and nothing guarantees Clariti's applicants are the same buildings.
+  The other 63% are one-off corner lots spread across the city, which only widening catches.
+
+### F3. Warning volume
+Per permit (the 687 set): address only = **1** block; address + corner blocks = **median 7** (mean 6.8; 6.1 of them
+swept blocks the app can warn on). The permits really cover 1.22 blocks on average. So widening is about **x6–7 the
+blocks** to raise coverage from 79% to 90%.
+
+What a user would feel: the app warns only for the parked block's own CNN (falling back to blocks within 25 m,
+`PermitAlerts.kt:117`), so the chance that a park gets a permit warning is about the share of swept blocks carrying one.
+Permits in effect or starting within 2 days of today (2026-09-26), out of 12,253 swept blocks:
+
+| warning source | swept blocks flagged | with today's feed |
+|---|---|---|
+| today's feed (`b6tj-gt35` TempOccup, as the app downloads it) | 262 (2.1%) | - |
+| + Clariti TOC, address only (35 permits) | 33 (0.3%) | 295 (2.4%) |
+| + Clariti TOC, address + corners | 208 (1.7%) | 467 (3.8%) |
+| + Clariti TOC + Street Space, address only (1,946 permits) | 1,326 (10.8%) | 1,573 (12.8%) |
+| + Clariti TOC + Street Space, address + corners | 5,272 (43.0%) | 5,451 (44.5%) |
+
+- **Clariti TOC is small** (35 live permits vs the old feed's ~260 blocks), so even corner-widened it takes a park's
+  chance of a warning from about 1 in 47 to about 1 in 26. That is noticeable but probably tolerable for a "check the
+  signs" hint.
+- **Street Space must stay out**, as the existing code already decided: address-only it would flag 1 swept block in
+  9, and corner-widened 43% of the city, which is useless as a warning.
+
+### Updated recommendation
+If Clariti goes into `PermitSource`: **Temporary Occupancy only**, address block + corner blocks, "near your block"
+wording. That is about 90% coverage at 1.7% of swept blocks (3.8% with today's feed). An address -> block exception
+list is a cheap optional add-on (+~8 points on the address block alone) but depends on old-system history. Don't add
+side-of-street filtering, and don't add Street Space.
