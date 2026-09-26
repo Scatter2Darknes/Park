@@ -12,6 +12,7 @@ Small Python 3 scripts (standard library only - nothing to install) that replace
 | `check_release_manifest.py` (A6) | proves a release APK contains no debug receiver | no |
 | `overlap_check.py` | how often SFMTA street closures and tow zones overlap (closures spec §4) | no device at all |
 | `pw_permit_check.py` | do Public Works datasets carry the permits the tow feed stopped getting (refactor spec Part A) | no device at all |
+| `clariti_cnn_join.py` | can Clariti permits (address only) be placed on a block via the EAS address registry | no device at all |
 | `common.py` (A1) | shared helpers (not run directly) | - |
 
 ## Safety rules (the scripts and their tests enforce these)
@@ -39,6 +40,13 @@ python scripts\overlap_check.py --force    # numbers now, as a floor
 
 ```
 python scripts\pw_permit_check.py
+```
+
+**`clariti_cnn_join.py`** - `docs/investigations/park-clariti-cnn-join-spec.md`: joins the Clariti permits' free-text `permit_address` to the EAS address registry (`ramy-di5m`) to get a CNN, cross-checks it against the street centerline's address ranges (`3psu-pn9h`), works out side of street from those ranges and checks it against geometry and the sweeping data's `cnnrightleft`, and tests the whole address -> block idea on old-system street-use permits whose real blocks are known. No phone or emulator; public citywide data only. The EAS download is ~390k rows, so use `--save-dir` once and `--from-dir` after. `--describe [--dataset ID]` prints columns, `--survey` the address shapes. Findings are in the spec.
+
+```
+python scripts\clariti_cnn_join.py --save-dir C:\temp\clariti
+python scripts\clariti_cnn_join.py --from-dir C:\temp\clariti --samples 20
 ```
 
 **`backup_db.py`** (A2) - copies `databases/park_database` (+ `-wal`, `-shm`) and `files/datastore/*.preferences_pb` to `backups/<yyyy-MM-dd_HHmmss>/` and verifies them.
